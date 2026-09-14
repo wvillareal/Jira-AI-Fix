@@ -21,3 +21,7 @@ Thumbs.db
 *.tmp
 __pycache__/
 node_modules/
+
+# Local merge backups
+*.pre-*-merge.bak
+
