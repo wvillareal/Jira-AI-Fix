@@ -1,0 +1,145 @@
+{
+  "_readme": [
+    "Template for %USERPROFILE%\\.jira-ai-config.json — the JIRA-AI-Fix runbook's only",
+    "configuration file. It lives in your user profile, NEVER inside a repository, so",
+    "secrets may be stored here directly. Never copy a value out of this file into a repo,",
+    "a Jira comment, a Confluence page, a pull request, or run output.",
+    "",
+    "No section below is required to START a run. Each one left empty REMOVES a capability:",
+    "the run then proves less and must disclose the skipped validation. See the runbook's",
+    "'Optional configurations' table for exactly what each one buys.",
+    "",
+    "The one exception is 'i21.repoRoot' — get that wrong and no run can find your code.",
+    "",
+    "Fill in what you have, delete nothing. To re-check which sections are populated and",
+    "still working, ask your AI agent to re-run Phase 6 of the package's START-HERE.md."
+  ],
+
+  "i21": {
+    "_enables": "Where YOUR i21 repository clones live. This is the runbook's REPO_ROOT: the single parent folder holding the ~45 sibling repos (AP, AR, GL, Liquibase, SqlScripts, ...). The runbook resolves which repo a ticket affects by itself, but it has to know where to look.",
+    "_whenMissing": "The runbook falls back to its built-in default C:\\i21Source. If your clones are anywhere else, every run fails to find the code - so set this even though nothing else here is mandatory.",
+    "_readBy": "The skill's SKILL.md passes this to the runbook as REPO_ROOT. The runbook itself only reads the atlassian, helpdesk and sqlServer sections, so this section is inert to it and cannot break it.",
+    "_notARepo": "This is the CONTAINER of repositories, not a repository. Never run git commands against it directly - it is not a git working tree.",
+    "repoRoot": ""
+  },
+
+  "atlassian": {
+    "_enables": "Reading Jira attachment evidence — screenshots, PDFs, attached DB backups. The Atlassian MCP is 403-blocked on attachment content, so without this a load-bearing screenshot cannot be read and the run stops at an Information Request instead of a root cause.",
+    "_precedence": "email + apiToken in this section, then tokenFile, then the ATLASSIAN_EMAIL / ATLASSIAN_API_TOKEN environment variables.",
+    "_apiTokenFrom": "https://id.atlassian.com/manage-profile/security/api-tokens",
+    "email": "",
+    "apiToken": "",
+    "tokenFile": ""
+  },
+
+  "helpdesk": {
+    "_enables": "Supplementary helpdesk (HDTN) evidence — above all the 'Database Copy' tab naming the server and database IT restored a customer copy onto, plus discussion threads and helpdesk-hosted images embedded in Jira descriptions (the Jira attachment field is often empty).",
+    "_whenMissing": "The gap is recorded and the run CONTINUES on the Jira's own evidence. Never a stop. An HD ticket is never required.",
+    "_cookieFrom": "Easiest by far: run Setup-JiraAiFix.ps1 -Section helpdesk and take the default 'open a browser and take it for me'. It drives the Edge/Chrome already on the machine over the DevTools protocol, waits while you sign in, and reads the cookies out of the browser - nothing to copy, nothing to paste, and it will not store a cookie it has not just proved against the server. Manual fallback: sign in, F12 -> Network -> reload -> right-click the top document request -> Copy -> Copy as cURL, and paste the command UNEDITED.",
+    "_cookieFormat": "The whole Cookie header - all name=value pairs joined by '; '. Do not filter to the ones that look important: sending all of them works, sending a subset fails in a way that looks exactly like an expired session.",
+    "_beSignedInFirst": "The i21 login is federated and two-step - email/username AND Company, then Next, then the Microsoft/Azure AD sign-in and any MFA - and no session cookie exists until that whole round trip finishes. Capturing while still on the sign-in page is the most common failure and does not look like one: that page issues the antiforgery cookie and clears the app session cookie, so the result is long, plausible, and rejected exactly like an expired cookie on every retry.",
+    "_captureTooEarly": "Two tells that the capture was taken before the sign-in finished, both of which the wizard now reports by name. A cookie named .AspNetCore.Antiforgery.* with NO .AspNetCore.Identity.Application means you were still on the sign-in form. Cookies named .AspNetCore.OpenIdConnect.Nonce.* or .AspNetCore.Correlation.* mean you were mid-handshake - after pressing Next, before Microsoft returned - because those exist only while the round trip is in flight. In both cases: finish the sign-in, RELOAD the finished page, then capture the top document request.",
+    "_browserPath": "Optional. Full path to the Chromium-family browser the 'open a browser and take it for me' route should drive - Edge, Chrome, Brave, Vivaldi or Chromium. Leave empty to auto-detect (Edge first, then Chrome, then the others). Firefox cannot be used: it does not speak the DevTools protocol. Set this only when a machine has several browsers and you want a specific one.",
+    "_cookieExpiry": "These last days, not months. Set obtainedAt when you capture it. When a run finds it expired the gap is recorded and the run CONTINUES on the Jira's own evidence - never a stop. To refresh, re-run Setup-JiraAiFix.ps1 -Section helpdesk; the browser profile keeps the sign-in, so it should need no typing.",
+    "baseUrl": "https://helpdesk.irely.com/irelyi21Live",
+    "cookie": "",
+    "obtainedAt": "",
+    "browserProfileDir": "",
+    "browserPath": ""
+  },
+
+  "sharepoint": {
+    "_enables": "Downloading a database backup whose link points at SharePoint. Tickets frequently carry the .bak as a SharePoint link rather than an attachment.",
+    "_whenMissing": "SharePoint-hosted backups are handed back to you to fetch by hand. Nothing else is affected and no run is blocked - it just costs you the download.",
+    "_cookieFrom": "Run Setup-JiraAiFix.ps1 -Section sharepoint. Same mechanism as the helpdesk section: it drives the browser already on the machine, waits for the Microsoft sign-in to finish, and reads the cookie out over the DevTools protocol. Nothing to copy or paste, and it will not store a cookie it has not just proved against the tenant.",
+    "_cookieFormat": "The whole Cookie header. FedAuth is the SharePoint session cookie and rtFa its cross-site companion; both are captured along with everything else the tenant sets.",
+    "_cookieExpiry": "Shorter-lived than the helpdesk cookie - often only a few days. Re-run the section to refresh; the browser profile keeps the sign-in, so it should need no typing.",
+    "tenant": "",
+    "cookie": "",
+    "obtainedAt": "",
+    "browserProfileDir": "",
+    "browserPath": ""
+  },
+
+  "appEnv": {
+    "_enables": "S1.7a runtime reproduction and S1.7c app-layer deployed fidelity. Symptoms only the client can raise — a dialog with no text in it, a column that renders blank while the query returns the value, a client-side script error, a document that renders wrong — cannot be executed from SQL at any price. S1.7c additionally reads what code the environment is actually serving, which is the only way to see a hand-applied patch: a database reports its own build, never the application build.",
+    "_whenMissing": "Those tickets are not reproduced. The run still exercises every cheaper layer, and only then — at S1.8b, carrying a ledger of what it executed on each layer and what each produced — does it request an environment and stop. Never a silent gap.",
+    "_sessionFrom": "Run Setup-JiraAiFix.ps1 -Section appenv. Same mechanism as the helpdesk and sharepoint sections: it drives the browser already on the machine, waits while you complete the sign-in including MFA, and keeps a dedicated profile. Sign-in is headed once; every reproduction and test after that is headless against that profile.",
+    "_whyTwoKinds": "Give it a prod entry and a dev entry where both exist. The prod-versus-dev comparison in S1.7c step 5 is what separates 'this is a live defect' from 'the fix is already in dev and prod has never received it' — a deployment gap, not a defect. Which kind the TICKET was reported on is resolved from its build stamp by S1.5a, never from the description: a JIRA is often reported on a Dev build.",
+    "_writeDiscipline": "A 'prod' entry is read from and never written to. New transactions (S1.8 Axis B) are created only on a 'dev' entry or a restored copy.",
+    "_password": "Optional, and unnecessary while the browser profile holds the session. Leave it blank unless you want unattended re-login.",
+    "_example": {
+      "prod": { "baseUrl": "https://host/2710PROD", "kind": "prod", "user": "", "password": "", "cookie": "", "obtainedAt": "", "browserProfileDir": "", "browserPath": "" },
+      "dev":  { "baseUrl": "https://host/2710DEV",  "kind": "dev",  "user": "", "password": "", "cookie": "", "obtainedAt": "", "browserProfileDir": "", "browserPath": "" }
+    }
+  },
+
+  "i21connect": {
+    "_enables": "S1.5a build-number to branch resolution. The release list maps a build number to the branch that produced it and to when it was built, so S1.5 targets the branch the report actually came from, S1.7 step 2.6 can tell a 26.3DevSucafina database from a 26.3ProdSucafina one (identical on main.major), and S1.7c can say whether an environment is behind its own branch.",
+    "_whenMissing": "S1.5 falls back to parsing the stamp. That works when the token is the branch (26.3ProdSucafina.0824.318) and fails when it is not — and the mainline shape is exactly the one it cannot recover: 24.22.0824.5121 is built from 24.2Dev, 22.12.0829.4808 from 22.1Dev. The run records BUILD_BRANCH UNRESOLVED and discloses the fallback rather than asserting a branch it guessed.",
+    "_sessionFrom": "Run Setup-JiraAiFix.ps1 -Section i21connect. Same browser-profile mechanism as helpdesk and sharepoint.",
+    "_releaseApi": "Optional. The release page is a single-page app, so a plain GET returns the shell. If you know the endpoint the page itself calls, put it here and each lookup becomes one request instead of a driven page; leave it blank and the runbook discovers it from a first headed run's network trace.",
+    "baseUrl": "https://i21connect.com",
+    "releaseApi": "",
+    "cookie": "",
+    "obtainedAt": "",
+    "browserProfileDir": "",
+    "browserPath": ""
+  },
+
+  "sqlServer": {
+    "_enables": "Restoring the database reported on a Jira onto a SQL Server you control, so a data-dependent symptom can actually be reproduced; and the Liquibase update + rollback confirmation.",
+    "_whenMissing": "DB_REQUIRED issues cannot be reproduced — the run falls back to an Information Request asking for the database, and any Liquibase confirmation is reported as NOT RUN.",
+    "_auth": "Set to \"sql\" to use user + password below, or \"windows\" to use integrated authentication (leave user and password empty).",
+    "_tunnelNote": "Reach a port-forwarded / tunnelled instance as 127.0.0.1,<port> — never as localhost, which resolves to ::1 and times out, looking like an unreachable server.",
+    "_instanceChoice": "Where several SQL Server instances are installed, prefer the NEWEST. A backup taken on a newer build cannot be restored onto an older one - restores are forward-compatible only - so the newest instance is the one that can open every customer backup.",
+    "server": "",
+    "instance": "",
+    "auth": "windows",
+    "user": "",
+    "password": "",
+
+    "restore": {
+      "_enables": "Where a downloaded customer database is staged and restored. Set these and restores land on a volume with room; leave them empty and they land wherever the instance defaults point, which is usually the system drive.",
+      "_defaultsFrom": "Ask the instance for its own defaults rather than guessing: SELECT SERVERPROPERTY('InstanceDefaultDataPath'), SERVERPROPERTY('InstanceDefaultLogPath').",
+      "_sizing": "A restore needs room for the .bak AND the fully expanded data and log files at the same time. An i21 customer database is routinely tens to hundreds of GB expanded, and the .bak is much smaller than what it expands to - so free space merely exceeding the backup size is NOT evidence the restore will fit. If staging and data share a volume, the requirement is their sum.",
+      "backupStagingDirectory": "",
+      "dataDirectory": "",
+      "logDirectory": "",
+      "minimumFreeSpaceGB": 75,
+      "keepRestoredDatabases": false,
+      "_keepRestoredDatabases": "false (recommended) drops a restored customer database once the run is done. They are large, they accumulate, and a stale copy is a hazard: a later run can silently analyze last month's data and reach a confident wrong conclusion. Set true only if you deliberately want them kept."
+    },
+
+    "knownServers": [
+      {
+        "_readme": "Servers where customer databases are ALREADY restored. When a Jira or helpdesk restore note names one of these, the run resolves it and uses the existing database in place - no download, no restore, no disk. The biggest time saver in this file.",
+        "_discovery": "Your AI agent populates these from the LocalForward entries in ~/.ssh/config, which is where SQL tunnels are already written down. It reads topology from that file only - never keys, never passwords.",
+        "_tunnel": "For a tunnelled server, 'address' is 127.0.0.1,<localForwardPort> - comma, not colon, and never localhost.",
+        "_credentials": "Always entered by hand, never harvested from a file. An entry with no credentials is still useful: the run can resolve the name and say what it needs.",
+        "_sshIsNotSqlAuth": "SSH and SQL Server are separate authentication layers. An SSH key makes the TUNNEL open without a prompt; it carries no identity into SQL Server, which still authenticates on its own. So a passwordless SSH setup does NOT remove the need for the user/password below.",
+        "_whyTunnelsNeedASqlLogin": "Windows integrated auth usually fails through a port forward: Kerberos binds the service principal to the server's real hostname, and a connection addressed to 127.0.0.1,<port> cannot resolve it, so it falls back to NTLM and is refused. Expect auth \"sql\" with a real login for a tunnelled server.",
+        "name": "",
+        "aliases": [],
+        "address": "",
+        "sshHost": "",
+        "auth": "windows",
+        "user": "",
+        "password": ""
+      }
+    ]
+  },
+
+  "_setupStatus": {
+    "_readme": "Written by the installer at the end of setup, and refreshed whenever you ask your agent to re-run the verification. It records what was configured, what was SKIPPED and the consequence you accepted, so every run can honestly disclose its own limits instead of quietly proving less.",
+    "_states": "verified = configured and proved by a live check. configured = written but not provable here. partial = works in part, detail says which part does not. skipped = declined with the consequence acknowledged. not-applicable = settled, never raise again. failed = configured but the live check failed.",
+    "_kinds": "On a skipped section, kind is 'not-yet' (offer it again next time) or 'not-applicable' (do not).",
+    "_verdicts": "READY = all good. READY-NARROWED = usable with optional capabilities off, the normal healthy outcome. NOT-READY = a foundation is missing (repoRoot unset, or no Atlassian MCP server) and no run can complete.",
+    "_noSecrets": "'detail' describes shape and outcome only - 'authenticated as <name>', 'token set, 24 chars'. Never a credential.",
+    "_editable": "Safe to edit or delete by hand. Deleting it only means runs stop reporting your setup gaps.",
+    "packageVersion": "",
+    "completedAt": "",
+    "verdict": "",
+    "sections": {}
+  }
+}

@@ -1,0 +1,39 @@
+﻿{
+  "_readme": [
+    "Copy this file to config.json in the same folder and fill in cursorApiKey + defaultRepo.",
+    "Jira credentials stay in %USERPROFILE%\\.jira-ai-config.json (atlassian section).",
+    "Cursor API key: https://cursor.com/dashboard -> Integrations / API Keys"
+  ],
+  "cursorApiKey": "",
+  "cursorApiKeyEnv": "CURSOR_API_KEY",
+  "cursorApiBase": "https://api.cursor.com",
+  "pollLookbackMinutes": 15,
+  "agentPollSeconds": 30,
+  "agentTimeoutMinutes": 180,
+  "waitForCompletion": true,
+  "autoCreatePR": false,
+  "notifyToast": true,
+  "issueTypes": [
+    "Bug",
+    "Bug-QC",
+    "Bug-UAP",
+    "Bug-Ongoing UAP",
+    "Technical Debt",
+    "Performance",
+    "Data Fix"
+  ],
+  "statuses": [
+    "Open",
+    "Reopened"
+  ],
+  "defaultRepo": {
+    "url": "https://dev.azure.com/irely/i21/_git/i21_Store",
+    "startingRef": "24.3Dev"
+  },
+  "repoByProject": {
+    "ST": {
+      "url": "https://dev.azure.com/irely/i21/_git/i21_Store",
+      "startingRef": "24.3Dev"
+    }
+  }
+}

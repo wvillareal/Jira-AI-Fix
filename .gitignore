@@ -1,0 +1,23 @@
+# Local / secrets — never push
+.jira-ai-config.json
+**/config.json
+!**/config.example.json
+!**/jira-ai-config.example.json
+
+# Automation runtime
+automation/processed.json
+automation/logs/
+automation/config.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# Build / temp
+*.log
+*.tmp
+__pycache__/
+node_modules/
