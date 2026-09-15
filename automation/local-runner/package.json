@@ -1,0 +1,13 @@
+{
+  "name": "jira-ai-local-runner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local Cursor SDK runner for jira-ai-fix (Desktop skill on this machine)",
+  "type": "module",
+  "scripts": {
+    "fix": "node run-jira-ai-fix.mjs"
+  },
+  "dependencies": {
+    "@cursor/sdk": "^1.0.31"
+  }
+}

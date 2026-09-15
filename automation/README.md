@@ -1,71 +1,75 @@
-# Jira-assign → Cloud Agent → local RCA draft
+# Jira-assign → local Desktop `jira-ai-fix` (Cursor SDK)
 
-Part of [wvillareal/Jira-AI-Fix](https://github.com/wvillareal/Jira-AI-Fix). After
-`Install-ToUserProfile.ps1`, live copies run from `%USERPROFILE%\.jira-ai-automation\`.
+Part of [wvillareal/Jira-AI-Fix](https://github.com/wvillareal/Jira-AI-Fix). Live copies run from
+`%USERPROFILE%\.jira-ai-automation\` after `Install-ToUserProfile.ps1`.
 
-Automates: when a Jira bug is **assigned to you**, start a Cursor **Cloud Agent** with
-`analyze and fix <KEY>` in **DRAFT_JIRA_COMMENT** mode (full fix + push, **no Jira comment
-post**), then save the section 6 RCA body under:
+## What it does
 
-`%USERPROFILE%\.jira-ai-drafts\<KEY>-rca.md`
+**Default (`mode: local`):** when a Jira bug is assigned to you, the **hidden** scheduled poller:
+
+1. Detects the assignment via Jira REST
+2. Starts a **local Cursor agent on your PC** (Cursor SDK) with prompt:
+
+   ```text
+   jira-ai-fix <KEY>
+
+   Mode: DRAFT_JIRA_COMMENT
+   ```
+
+3. Loads your real skill from `~\.cursor\skills\jira-ai-fix` (`settingSources: user`)
+4. Uses `i21.repoRoot` (e.g. `C:\i21Source`) so local clones / SQL / config apply
+5. Implements and validates a fix when appropriate, then commits it to a local feature branch without pushing
+6. Immediately emails and toasts that the investigation started, including the Jira's current status
+7. Saves the RCA draft to `~\.jira-ai-drafts\<KEY>-rca.md`
+8. Emails the completed draft, or sends a failure email if the run stops early
+
+Before launching the agent, the poller records the Jira as `in-progress`. This prevents duplicate
+launches and start emails. If Windows interrupts the run, the next poll recovers it and sends an
+`Investigation resumed` email.
+
+Before fetching Jira details or starting an investigation, the poller also checks for
+`~\.jira-ai-drafts\<KEY>-rca.md`. If that draft already exists, the Jira is treated as
+previously investigated and skipped. Delete the draft first only when a fresh investigation
+is intentionally required.
+
+If an investigation fails, the poller deletes that Jira's local RCA draft/meta so a
+partial or stale draft cannot block a later retry. Failed items with no draft are
+eligible for recovery on the next poll.
+
+The local runner retries stall/AbortError failures up to 3 attempts. Any final failure
+writes `~\.jira-ai-automation\logs\failures\<KEY>-failure.txt` with the failed process
+part, why it failed, and the root cause.
+
+Cloud Cursor Agents are **not** used.
+
+**Fallback (`mode: notify`):** toast + clipboard only — you paste into Desktop yourself.
 
 ## Setup
 
-1. From the repo root: `Install-ToUserProfile.ps1` (or copy these scripts into
-   `%USERPROFILE%\.jira-ai-automation`).
-2. Ensure `config.json` exists there (copy from `config.example.json` if needed).
-3. Set `cursorApiKey` (from [Cursor Dashboard](https://cursor.com/dashboard)) **or** set
-   user env `CURSOR_API_KEY` (see `cursorApiKeyEnv`).
-4. Confirm `defaultRepo.url` / `startingRef` (and `repoByProject` for ST, etc.) match remotes
-   connected to your Cursor Cloud Agents account.
-5. Confirm `%USERPROFILE%\.jira-ai-config.json` has working `atlassian.email` + `apiToken` +
-   `siteUrl`.
-6. Optional: install the scheduled task:
+1. Node.js on PATH; `CURSOR_API_KEY` user env (Cursor Dashboard → API Keys).
+2. `Install-ToUserProfile.ps1` (copies scripts + `local-runner`, runs `npm install`).
+3. `"mode": "local"` in `%USERPROFILE%\.jira-ai-automation\config.json`.
+4. Hidden scheduled task:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.jira-ai-automation\Install-ScheduledTask.ps1" -IntervalMinutes 5
 ```
 
-## Manual / dry-run
+## Manual
 
 ```powershell
-# Placeholder draft only (no Cursor API)
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.jira-ai-automation\Invoke-JiraAssignPoller.ps1" -DryRun -IssueKey ST-13291
+# Full local agent for one key (long-running)
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.jira-ai-automation\Invoke-JiraAssignPoller.ps1" -IssueKey ST-13297
 
-# Live: launch Cloud Agent for one key and wait for §6 draft harvest
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.jira-ai-automation\Invoke-JiraAssignPoller.ps1" -IssueKey ST-13291
-
-# Poll Jira for recent assignee-changed Open/Reopened bugs
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.jira-ai-automation\Invoke-JiraAssignPoller.ps1"
+# Or call the runner directly
+node "$env:USERPROFILE\.jira-ai-automation\local-runner\run-jira-ai-fix.mjs" --jira ST-13297
 ```
 
-## Draft location and later posting
+## Files
 
-| File | Purpose |
+| Path | Purpose |
 |------|---------|
-| `~\.jira-ai-drafts\<KEY>-rca.md` | §6 RCA / Acceptance Verification body |
-| `~\.jira-ai-drafts\<KEY>-meta.json` | agent id, run id, branch, timestamps |
-| `~\.jira-ai-automation\processed.json` | dedupe so the same key is not re-fired |
-| `~\.jira-ai-automation\logs\poller-YYYYMMDD.log` | run log |
-
-In a **new Cursor chat**, ask:
-
-`post jira comment draft for ST-13291`
-
-The agent should read the draft file (already §6-shaped), show it, and post to Jira only
-after you confirm.
-
-## Skill contract
-
-See `%USERPROFILE%\.claude\skills\jira-ai-fix\DRAFT_MODE.md` (mirrored under `.cursor\skills`).
-
-The Cloud Agent prompt forces `Mode: DRAFT_JIRA_COMMENT` and requires a single
-`jira-rca-draft` fence containing the full §6 comment from `runbook/JIRA-AI-Fix.md`.
-
-## Notes / limits
-
-- Cursor cannot open a Desktop Composer chat from Jira; this uses **Cloud Agents** instead.
-- Cloud Agents need your repo connected in Cursor; SQL restores on your laptop are not
-  available in the cloud VM (same disclosure as the runbook when SQL is unavailable).
-- Deduping is permanent until you delete the key from `processed.json`.
-- `autoCreatePR` stays `false` (use `create-jira-pr` when you want a PR).
+| `automation/local-runner/` | Node + `@cursor/sdk` runner |
+| `~\.jira-ai-drafts\<KEY>-rca.md` | section 6 draft |
+| `~\.jira-ai-automation\logs\` | poller + local-runner logs |
+| `~\.jira-ai-automation\logs\failures\<KEY>-failure.txt` | failure diagnostics |

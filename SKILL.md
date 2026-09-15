@@ -28,10 +28,25 @@ database repo and Store UI/server paths. These overrides live here so redistribu
 packages do not wipe them — do not edit `runbook/JIRA-AI-Fix.md` for this.
 
 Also apply [DRAFT_JIRA_COMMENT mode](DRAFT_MODE.md) when the prompt contains
-`DRAFT_JIRA_COMMENT` or `Mode: DRAFT_JIRA_COMMENT`: run the full fix + push, **author**
-the §6 RCA / Acceptance Verification comment, **do not post it to Jira**, and emit a
-`jira-rca-draft` fence (and write `%USERPROFILE%\.jira-ai-drafts\<JIRA_KEY>-rca.md`
-when running locally).
+`DRAFT_JIRA_COMMENT` or `Mode: DRAFT_JIRA_COMMENT`: run through implementation,
+validation, feature-branch creation, and a **local commit**, but **never push**.
+**Author** the §6 RCA / Acceptance Verification comment, **do not post it to Jira**,
+and emit a `jira-rca-draft` fence (and write
+`%USERPROFILE%\.jira-ai-drafts\<JIRA_KEY>-rca.md` when running locally).
+
+## Jira comment voice (all comments)
+
+Every Jira comment this skill posts or drafts — §6 RCA / Acceptance Verification,
+information request, triage, handoff, and local RCA drafts — must be **short, direct,
+and professional**:
+
+- Keep the required §6 block register and honesty rules; compress the **prose inside**
+  each block. Do not invent a shorter custom template.
+- Prefer short sentences and tight bullets. Cut filler, hedging, narration, and
+  throat-clearing (“In order to…”, “It should be noted that…”, long restatements).
+- One claim per bullet; evidence factual and minimal. Link or name the artifact once.
+- No casual tone, no emoji (unless a runbook marker requires it), no marketing language.
+- Ask only for what is missing; state only what was done, found, or blocked.
 
 ## Scope, before you read anything else
 
@@ -50,7 +65,8 @@ comes from the config file, not from the runbook's built-in default.
 
 This runbook **creates no pull request and propagates nothing.** It ends after the push and
 the Jira comment, with a handoff — **except** in `DRAFT_JIRA_COMMENT` mode, where the
-comment is authored per §6 but saved as a local draft instead of posted (see
+fix is committed only to the local feature branch with no push, and the comment is
+authored per §6 but saved as a local draft instead of posted (see
 [DRAFT_MODE.md](DRAFT_MODE.md)).
 
 ## Distributed copy — read this before following the runbook

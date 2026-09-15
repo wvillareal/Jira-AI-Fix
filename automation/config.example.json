@@ -1,18 +1,28 @@
 ﻿{
   "_readme": [
-    "Copy this file to config.json in the same folder and fill in cursorApiKey + defaultRepo.",
-    "Jira credentials stay in %USERPROFILE%\\.jira-ai-config.json (atlassian section).",
-    "Cursor API key: https://cursor.com/dashboard -> Integrations / API Keys"
+    "Copy this file to config.json in the same folder.",
+    "mode local = poller starts Cursor local SDK agent with real jira-ai-fix skill on this PC.",
+    "mode notify = toast + clipboard only (paste in Desktop).",
+    "Cloud Cursor Agents are retired.",
+    "Requires Node.js + CURSOR_API_KEY (Dashboard API key) for mode local.",
+    "Jira credentials stay in %USERPROFILE%\\.jira-ai-config.json.",
+    "notifyEmail true sends investigation started/resumed, completed-draft, and failure emails."
   ],
-  "cursorApiKey": "",
-  "cursorApiKeyEnv": "CURSOR_API_KEY",
-  "cursorApiBase": "https://api.cursor.com",
+  "mode": "local",
   "pollLookbackMinutes": 15,
-  "agentPollSeconds": 30,
-  "agentTimeoutMinutes": 180,
-  "waitForCompletion": true,
-  "autoCreatePR": false,
+  "localCwd": "",
+  "localModel": "auto",
+  "localRunnerDir": "",
   "notifyToast": true,
+  "notifyClipboard": true,
+  "notifyEmail": true,
+  "emailTo": "",
+  "emailDelivery": "send",
+  "emailOpenClient": false,
+  "emailExcludeKeyRegexes": [
+    "(?i)^ST-SMOKE",
+    "(?i)^ST-99999$"
+  ],
   "issueTypes": [
     "Bug",
     "Bug-QC",
@@ -33,6 +43,14 @@
   "repoByProject": {
     "ST": {
       "url": "https://dev.azure.com/irely/i21/_git/i21_Store",
+      "startingRef": "24.3Dev"
+    },
+    "IC": {
+      "url": "https://dev.azure.com/irely/i21/_git/i21_Inventory",
+      "startingRef": "24.3Dev"
+    },
+    "AP": {
+      "url": "https://dev.azure.com/irely/i21/_git/i21_AccountsPayable",
       "startingRef": "24.3Dev"
     }
   }

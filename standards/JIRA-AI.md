@@ -1036,6 +1036,8 @@ STOP if the push fails; report the error. Do not post the Jira comment for a cha
 
 ## §6 Comment on JIRA — Root Cause Analysis / Developer's Testing (MANDATORY on a successful fix)
 
+**Voice (all Jira comments this runbook posts):** short, direct, and professional. Keep every required block and honesty rule; compress the prose *inside* each block. Prefer short sentences and tight bullets. No filler, hedging, narration, casual tone, emoji, or marketing language.
+
 **The RCA comment means "FIXED".** It is posted ONLY when this run delivered a fix — a validated change pushed on `<FEATURE_BRANCH>` (§5), or a data fix authored, tested and rolled back per §3.6. A run that ends any other way posts the matching §1.6 / §6.5 comment instead (see **R-NOFIX-COMMENT** in §1.6) and never an RCA. Never post an RCA describing a fix that was not delivered.
 
 Post ONE comment on the parent `<JIRA>` combining the **Root Cause Analysis** with a **Developer's Testing** block that maps each acceptance criterion to the evidence gathered in §3 (or §3.6).

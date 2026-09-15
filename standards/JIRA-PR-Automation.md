@@ -458,6 +458,8 @@ After the push succeeds, continue to §6 (post the RCA), then §7 (create the PR
 
 ## §6 Root Cause Analysis (RCA) — Jira comment (MANDATORY, post BEFORE the PR)
 
+**Voice:** short, direct, and professional. Keep the required RCA structure; compress prose inside each block. No filler, hedging, casual tone, emoji, or marketing language.
+
 Post the RCA as a comment on the parent `<JIRA>` **before** creating the PR (§7). This documents the analysis while the change is fresh and gives reviewers the context before the PR opens.
 
 PRE-REQ:
