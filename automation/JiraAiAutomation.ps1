@@ -684,6 +684,8 @@ function Write-JiraAiFailureReport {
     <#
       Writes %USERPROFILE%\.jira-ai-automation\logs\failures\<KEY>-failure.txt
       describing why a process failed, which part failed, and the root cause.
+      Also preserves/creates the RCA draft with the same failure note so the
+      poller will not keep reinvestigating the same failing Jira forever.
     #>
     param(
         [Parameter(Mandatory)][string]$JiraKey,
@@ -719,7 +721,105 @@ function Write-JiraAiFailureReport {
     )
     Set-Content -LiteralPath $path -Value ($lines -join [Environment]::NewLine) -Encoding UTF8
     Write-JiraAiLog ('Failure report written: {0}' -f $path)
+
+    Save-JiraAiFailureNoteInDraft `
+        -JiraKey $key `
+        -Phase $Phase `
+        -Why $Why `
+        -RootCause $RootCause `
+        -FailureLogPath $path `
+        -ProcessName $ProcessName `
+        -ExitCode $ExitCode `
+        -Status $Status | Out-Null
+
     return $path
+}
+
+function Save-JiraAiFailureNoteInDraft {
+    <#
+      Keeps any existing RCA draft and appends (or creates) a failure note so
+      draft-based skip prevents endless retries after a failed investigation.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$JiraKey,
+        [Parameter(Mandatory)][string]$Phase,
+        [Parameter(Mandatory)][string]$Why,
+        [Parameter(Mandatory)][string]$RootCause,
+        [string]$FailureLogPath = '',
+        [string]$ProcessName = '',
+        [object]$ExitCode = $null,
+        [string]$Status = ''
+    )
+
+    $key = $JiraKey.ToUpperInvariant()
+    $drafts = Get-JiraAiDraftsRoot
+    if (-not (Test-Path -LiteralPath $drafts)) {
+        New-Item -ItemType Directory -Force -Path $drafts | Out-Null
+    }
+    $mdPath = Join-Path $drafts ('{0}-rca.md' -f $key)
+    $metaPath = Join-Path $drafts ('{0}-meta.json' -f $key)
+    $stamp = (Get-Date).ToString('o')
+
+    $note = @(
+        ''
+        '---'
+        ''
+        '## Automation failure'
+        ''
+        ('- Time: {0}' -f $stamp)
+        ('- Process: {0}' -f $ProcessName)
+        ('- Failed part: {0}' -f $Phase)
+        ('- Why it failed: {0}' -f $Why)
+        ('- Root cause: {0}' -f $RootCause)
+        ('- Status: {0}' -f $Status)
+        ('- Exit code: {0}' -f $ExitCode)
+        ('- Failure log: {0}' -f $FailureLogPath)
+        ''
+        'Automation will not reinvestigate this Jira while this RCA draft exists.'
+        'Delete this draft (and optionally the failure log) only when a fresh investigation is intentional.'
+        ''
+    ) -join [Environment]::NewLine
+
+    if (Test-Path -LiteralPath $mdPath) {
+        $existing = Get-Content -LiteralPath $mdPath -Raw -Encoding UTF8
+        if ($existing -notmatch '(?m)^## Automation failure\s*$') {
+            Set-Content -LiteralPath $mdPath -Value ($existing.TrimEnd() + [Environment]::NewLine + $note) -Encoding UTF8
+        }
+        else {
+            # Replace the previous automation-failure section with the latest failure note.
+            $updated = [regex]::Replace(
+                $existing,
+                '(?ms)^---\s*^## Automation failure.*',
+                $note.TrimStart()
+            )
+            Set-Content -LiteralPath $mdPath -Value $updated.TrimEnd() -Encoding UTF8
+        }
+        Write-JiraAiLog ('Appended failure note to existing RCA draft: {0}' -f $mdPath)
+    }
+    else {
+        $body = @(
+            ('# Investigation incomplete: {0}' -f $key)
+            ''
+            'No completed RCA was produced. The automation failure details are below.'
+            $note
+        ) -join [Environment]::NewLine
+        Set-Content -LiteralPath $mdPath -Value $body -Encoding UTF8
+        Write-JiraAiLog ('Created failure RCA draft marker: {0}' -f $mdPath)
+    }
+
+    $meta = [ordered]@{
+        jiraKey        = $key
+        mode           = 'local'
+        investigation  = 'failed'
+        finishedAt     = $stamp
+        failurePhase   = $Phase
+        failureWhy     = $Why
+        failureRootCause = $RootCause
+        failureLogPath = $FailureLogPath
+        jiraCommentPosted = $false
+    }
+    ($meta | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath $metaPath -Encoding UTF8
+    return $mdPath
 }
 
 function Show-JiraAiToast {

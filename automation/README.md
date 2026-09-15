@@ -32,13 +32,14 @@ Before fetching Jira details or starting an investigation, the poller also check
 previously investigated and skipped. Delete the draft first only when a fresh investigation
 is intentionally required.
 
-If an investigation fails, the poller deletes that Jira's local RCA draft/meta so a
-partial or stale draft cannot block a later retry. Failed items with no draft are
-eligible for recovery on the next poll.
+If an investigation fails, the poller **keeps** any RCA draft and appends an
+`Automation failure` section (or creates a failure draft marker if none exists).
+It also writes `~\.jira-ai-automation\logs\failures\<KEY>-failure.txt`. Because the
+draft remains, the next poll skips that Jira and will not investigate forever.
+Delete the draft only when you intentionally want a fresh run.
 
-The local runner retries stall/AbortError failures up to 3 attempts. Any final failure
-writes `~\.jira-ai-automation\logs\failures\<KEY>-failure.txt` with the failed process
-part, why it failed, and the root cause.
+The local runner retries stall/AbortError failures up to 3 attempts. After final
+failure it preserves the draft and records the failed part, why, and root cause.
 
 Cloud Cursor Agents are **not** used.
 

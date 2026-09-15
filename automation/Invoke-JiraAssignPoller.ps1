@@ -49,22 +49,17 @@ else {
         $prior = $store.Items[$recoverKey]
         if (-not $prior) { continue }
 
-        $lifecycle = [string]$prior.lifecycle
-        $isInterrupted = ($lifecycle -eq 'in-progress')
-        $isFailedRetry = ($lifecycle -eq 'failed')
-        if (-not $isInterrupted -and -not $isFailedRetry) { continue }
-
-        $existingDraft = Join-Path (Get-JiraAiDraftsRoot) ('{0}-rca.md' -f $recoverKey)
-        if ($isFailedRetry -and (Test-Path -LiteralPath $existingDraft)) { continue }
+        # Only recover interrupted in-progress runs. Failed investigations keep
+        # their RCA draft (with failure note) and must not be retried forever.
+        if ([string]$prior.lifecycle -ne 'in-progress') { continue }
 
         $ownerIsAlive = $false
-        if ($isInterrupted -and $prior.ownerPid) {
+        if ($prior.ownerPid) {
             $ownerIsAlive = $null -ne (Get-Process -Id ([int]$prior.ownerPid) -ErrorAction SilentlyContinue)
         }
         if ($ownerIsAlive -or $knownKeys.ContainsKey($recoverKey)) { continue }
 
-        $reason = if ($isFailedRetry) { 'failed' } else { 'interrupted' }
-        Write-JiraAiLog ('Recovering {0} investigation for {1}.' -f $reason, $recoverKey) 'WARN'
+        Write-JiraAiLog ('Recovering interrupted investigation for {0}.' -f $recoverKey) 'WARN'
         $issues += [pscustomobject]@{
             Key        = $recoverKey
             Summary    = [string]$prior.summary
@@ -105,8 +100,7 @@ foreach ($issue in $issues) {
 
     $priorItem = if ($store.Items.ContainsKey($key)) { $store.Items[$key] } else { $null }
     $recovering = [bool]($priorItem -and [string]$priorItem.lifecycle -eq 'in-progress')
-    $retryingFailed = [bool]($priorItem -and [string]$priorItem.lifecycle -eq 'failed')
-    if ($priorItem -and -not $IssueKey -and -not $recovering -and -not $retryingFailed) {
+    if ($priorItem -and -not $IssueKey -and -not $recovering) {
         Write-JiraAiLog ('Skip {0} (already processed).' -f $key)
         continue
     }
@@ -206,8 +200,8 @@ foreach ($issue in $issues) {
         }
 
         $failurePath = $null
+        $draftAfterFailure = $null
         if (-not $local.Ok -and -not $DryRun) {
-            Remove-JiraAiRcaDraft -JiraKey $key | Out-Null
             $failurePath = $local.FailurePath
             if (-not $failurePath -or -not (Test-Path -LiteralPath $failurePath)) {
                 $failurePath = Write-JiraAiFailureReport `
@@ -222,6 +216,20 @@ foreach ($issue in $issues) {
                     -Cwd ([string]$local.Cwd) `
                     -RunId ([string]$local.RunId)
             }
+            else {
+                # Runner already wrote logs/failures; still preserve/annotate the RCA draft.
+                Save-JiraAiFailureNoteInDraft `
+                    -JiraKey $key `
+                    -Phase $(if ($local.FailurePhase) { $local.FailurePhase } else { 'local-agent-execution' }) `
+                    -Why $(if ($local.FailureWhy) { $local.FailureWhy } else { ('Local agent exited with code {0} (status={1}).' -f $local.ExitCode, $local.Status) }) `
+                    -RootCause $(if ($local.RootCause) { $local.RootCause } else { 'Runner returned non-zero without a structured failure report.' }) `
+                    -FailureLogPath $failurePath `
+                    -ProcessName 'local Cursor SDK agent' `
+                    -ExitCode $local.ExitCode `
+                    -Status ([string]$local.Status) | Out-Null
+            }
+            $draftAfterFailure = Join-Path (Get-JiraAiDraftsRoot) ('{0}-rca.md' -f $key)
+            if (-not (Test-Path -LiteralPath $draftAfterFailure)) { $draftAfterFailure = $null }
         }
 
         $store.Items[$key] = @{
@@ -232,7 +240,7 @@ foreach ($issue in $issues) {
             summary    = [string]$issue.Summary
             jiraStatus = [string]$issue.Status
             browseUrl  = $browseUrl
-            draft      = if ($local.Ok) { $local.DraftPath } else { $null }
+            draft      = if ($local.Ok) { $local.DraftPath } else { $draftAfterFailure }
             failure    = if ($local.Ok) { $null } else { $failurePath }
             status     = $local.Status
             runId      = $local.RunId
@@ -250,6 +258,7 @@ foreach ($issue in $issues) {
             if (-not $DryRun) {
                 $failDetails = 'Exit code: {0}; runner status: {1}' -f $local.ExitCode, $local.Status
                 if ($failurePath) { $failDetails = '{0}; failure report: {1}' -f $failDetails, $failurePath }
+                if ($draftAfterFailure) { $failDetails = '{0}; RCA draft kept: {1}' -f $failDetails, $draftAfterFailure }
                 if ($local.FailureWhy) { $failDetails = '{0}`nWhy: {1}' -f $failDetails, $local.FailureWhy }
                 if ($local.RootCause) { $failDetails = '{0}`nRoot cause: {1}' -f $failDetails, $local.RootCause }
                 try {
@@ -272,7 +281,6 @@ foreach ($issue in $issues) {
         $failureMessage = $_.Exception.Message
         Write-JiraAiLog ('Failed {0}: {1}' -f $key, $failureMessage) 'ERROR'
         if (-not $DryRun) {
-            Remove-JiraAiRcaDraft -JiraKey $key | Out-Null
             $failurePath = Write-JiraAiFailureReport `
                 -JiraKey $key `
                 -ProcessName 'automation poller' `
@@ -281,6 +289,8 @@ foreach ($issue in $issues) {
                 -RootCause 'Unhandled exception while starting or waiting on the local investigation.' `
                 -Details $_.Exception.ToString() `
                 -Status 'exception'
+            $draftAfterFailure = Join-Path (Get-JiraAiDraftsRoot) ('{0}-rca.md' -f $key)
+            if (-not (Test-Path -LiteralPath $draftAfterFailure)) { $draftAfterFailure = $null }
             $store.Items[$key] = @{
                 lifecycle  = 'failed'
                 startedAt  = $startedAt
@@ -289,7 +299,7 @@ foreach ($issue in $issues) {
                 summary    = [string]$issue.Summary
                 jiraStatus = [string]$issue.Status
                 browseUrl  = $browseUrl
-                draft      = $null
+                draft      = $draftAfterFailure
                 failure    = $failurePath
                 status     = 'exception'
                 error      = $failureMessage

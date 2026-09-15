@@ -216,18 +216,76 @@ function writeFailureReport(jiraKey, report) {
   ];
   fs.writeFileSync(failurePath, lines.join("\n"), "utf8");
   log(`Failure report written ${failurePath}`);
+  annotateRcaWithFailure(jiraKey, report, failurePath);
   return failurePath;
 }
 
-function removeRcaArtifacts(jiraKey) {
+function annotateRcaWithFailure(jiraKey, report, failurePath) {
   const dir = draftsDir();
-  for (const name of [`${jiraKey}-rca.md`, `${jiraKey}-meta.json`, `${jiraKey}-notify.md`]) {
-    const p = path.join(dir, name);
-    if (fs.existsSync(p)) {
-      fs.unlinkSync(p);
-      log(`Removed incomplete artifact ${p}`);
+  fs.mkdirSync(dir, { recursive: true });
+  const mdPath = path.join(dir, `${jiraKey}-rca.md`);
+  const metaPath = path.join(dir, `${jiraKey}-meta.json`);
+  const stamp = report.failedAt || new Date().toISOString();
+  const note = [
+    "",
+    "---",
+    "",
+    "## Automation failure",
+    "",
+    `- Time: ${stamp}`,
+    `- Process: ${report.process || "local-runner / Cursor SDK jira-ai-fix"}`,
+    `- Failed part: ${report.phase}`,
+    `- Why it failed: ${report.why}`,
+    `- Root cause: ${report.rootCause}`,
+    `- Status: ${report.status || ""}`,
+    `- Exit code: ${report.exitCode ?? ""}`,
+    `- Failure log: ${failurePath}`,
+    "",
+    "Automation will not reinvestigate this Jira while this RCA draft exists.",
+    "Delete this draft (and optionally the failure log) only when a fresh investigation is intentional.",
+    "",
+  ].join("\n");
+
+  if (fs.existsSync(mdPath)) {
+    const existing = fs.readFileSync(mdPath, "utf8");
+    if (!/^## Automation failure\s*$/m.test(existing)) {
+      fs.writeFileSync(mdPath, existing.replace(/\s+$/, "") + "\n" + note, "utf8");
+    } else {
+      const updated = existing.replace(/(?:^|\n)---\s*\n## Automation failure[\s\S]*$/m, "\n" + note.trimStart());
+      fs.writeFileSync(mdPath, updated.replace(/\s+$/, "") + "\n", "utf8");
     }
+    log(`Appended failure note to existing RCA draft ${mdPath}`);
+  } else {
+    const body = [
+      `# Investigation incomplete: ${jiraKey}`,
+      "",
+      "No completed RCA was produced. The automation failure details are below.",
+      note,
+    ].join("\n");
+    fs.writeFileSync(mdPath, body, "utf8");
+    log(`Created failure RCA draft marker ${mdPath}`);
   }
+
+  fs.writeFileSync(
+    metaPath,
+    JSON.stringify(
+      {
+        jiraKey,
+        mode: "local",
+        investigation: "failed",
+        finishedAt: stamp,
+        failurePhase: report.phase,
+        failureWhy: report.why,
+        failureRootCause: report.rootCause,
+        failureLogPath: failurePath,
+        jiraCommentPosted: false,
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+  return mdPath;
 }
 
 async function runOnce({ jiraKey, apiKey, cwd, modelId, prompt, storeRoot, attempt, maxAttempts }) {
@@ -400,7 +458,6 @@ async function main() {
     }
   }
 
-  removeRcaArtifacts(jiraKey);
   const failurePath = writeFailureReport(jiraKey, {
     process: "local-runner / Cursor SDK jira-ai-fix",
     phase: lastClassified?.phase || "local-runner",
@@ -435,11 +492,6 @@ async function main() {
 main().catch((err) => {
   const jiraKey = (arg("--jira") || arg("-j") || "UNKNOWN").toUpperCase();
   const classified = classifyFailure(err, { phase: "local-runner-fatal" });
-  try {
-    removeRcaArtifacts(jiraKey);
-  } catch {
-    /* ignore */
-  }
   let failurePath = null;
   try {
     failurePath = writeFailureReport(jiraKey, {
