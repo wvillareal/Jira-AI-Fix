@@ -44,10 +44,10 @@ Copy-SkillTree -Dest $claudeSkill
 Copy-SkillTree -Dest $cursorSkill
 
 New-Item -ItemType Directory -Force -Path $autoDest | Out-Null
-$failureLogs = Join-Path $autoDest 'logs\failures'
-New-Item -ItemType Directory -Force -Path $failureLogs | Out-Null
+$logsDir = Join-Path $autoDest 'logs'
+New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
 $autoSrc = Join-Path $RepoRoot 'automation'
-foreach ($name in @('JiraAiAutomation.ps1', 'Invoke-JiraAssignPoller.ps1', 'Install-ScheduledTask.ps1', 'config.example.json', 'README.md')) {
+foreach ($name in @('JiraAiAutomation.ps1', 'Invoke-JiraAssignPoller.ps1', 'Invoke-JiraAssignPoller-Silent.vbs', 'Install-ScheduledTask.ps1', 'config.example.json', 'README.md')) {
     $src = Join-Path $autoSrc $name
     if (Test-Path -LiteralPath $src) {
         Copy-Item -Force -LiteralPath $src -Destination (Join-Path $autoDest $name)

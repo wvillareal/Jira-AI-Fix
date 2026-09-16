@@ -10,11 +10,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script = Join-Path $PSScriptRoot 'Invoke-JiraAssignPoller.ps1'
+$vbs = Join-Path $PSScriptRoot 'Invoke-JiraAssignPoller-Silent.vbs'
 if (-not (Test-Path -LiteralPath $script)) { throw "Missing $script" }
+if (-not (Test-Path -LiteralPath $vbs)) { throw "Missing $vbs" }
 
-# -WindowStyle Hidden keeps the periodic poller off your desktop.
-$arg = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script`""
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
+# Launch via wscript + VBS (window style 0) so the periodic poller does not flash a console.
+# Direct powershell.exe -WindowStyle Hidden still briefly shows a window on many hosts.
+$arg = "//B //Nologo `"$vbs`""
+$action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument $arg
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
     -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) `
     -RepetitionDuration (New-TimeSpan -Days 3650)
@@ -25,6 +28,7 @@ $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interac
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
     -Settings $settings -Principal $principal -Force | Out-Null
 
-Write-Host "Scheduled task '$TaskName' registered (every $IntervalMinutes minute(s), hidden window)."
+Write-Host "Scheduled task '$TaskName' registered (every $IntervalMinutes minute(s), silent via wscript)."
+Write-Host "Launcher: $vbs"
 Write-Host "Script: $script"
 Write-Host "To remove: Unregister-ScheduledTask -TaskName '$TaskName' -Confirm:`$false"
