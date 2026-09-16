@@ -6,10 +6,8 @@
 
 # Automation runtime
 automation/processed.json
-automation/logs/*
-!automation/logs/failures/
-automation/logs/failures/*
-!automation/logs/failures/README.md
+automation/logs/**
+!automation/logs/README.md
 automation/config.json
 
 # OS / editor
