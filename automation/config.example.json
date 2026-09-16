@@ -1,17 +1,23 @@
-﻿{
+{
   "_readme": [
     "Copy this file to config.json in the same folder.",
     "mode local = poller starts Cursor local SDK agent with real jira-ai-fix skill on this PC.",
     "mode notify = toast + clipboard only (paste in Desktop).",
     "Cloud Cursor Agents are retired.",
     "Requires Node.js + CURSOR_API_KEY (Dashboard API key) for mode local.",
+    "investigateModel = phase 1 (Jira/HDTN/root-cause/plan/code). wrapUpModel = phase 2 (feature branch/RCA draft/wrap-up).",
+    "localModel is a legacy alias for investigateModel when investigateModel is omitted.",
+    "lockStaleMinutes = orphan lock reclaim / heartbeat-stale WARN when no live owner PID; live PIDs are never auto-reclaimed (use -Force).",
     "Jira credentials stay in %USERPROFILE%\\.jira-ai-config.json.",
     "notifyEmail true sends investigation started/resumed, completed-draft, and failure emails."
   ],
   "mode": "local",
   "pollLookbackMinutes": 15,
   "localCwd": "",
-  "localModel": "auto",
+  "investigateModel": "grok-4.5",
+  "wrapUpModel": "auto",
+  "localModel": "grok-4.5",
+  "lockStaleMinutes": 45,
   "localRunnerDir": "",
   "notifyToast": true,
   "notifyClipboard": true,

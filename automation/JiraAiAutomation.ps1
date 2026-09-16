@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
   Helpers for Jira-assign automation (Desktop notify / future local agent).
@@ -12,12 +12,84 @@ function Get-JiraAiDraftsRoot {
     Join-Path $env:USERPROFILE '.jira-ai-drafts'
 }
 
-function Get-JiraAiFailureLogsRoot {
-    $dir = Join-Path (Get-JiraAiAutomationRoot) 'logs\failures'
+function Get-JiraAiLogsRoot {
+    $dir = Join-Path (Get-JiraAiAutomationRoot) 'logs'
     if (-not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
     }
     $dir
+}
+
+# When set, Write-JiraAiLog / Get-JiraAiProcessLogPath target MMddyyyy_<KEY>.txt
+$script:JiraAiActiveLogKey = $null
+
+function Get-JiraAiProcessLogPath {
+    param(
+        [string]$JiraKey = $null
+    )
+    $key = $null
+    if (-not [string]::IsNullOrWhiteSpace($JiraKey)) {
+        $key = $JiraKey.Trim().ToUpperInvariant()
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($script:JiraAiActiveLogKey)) {
+        $key = $script:JiraAiActiveLogKey.Trim().ToUpperInvariant()
+    }
+
+    $stamp = '{0:MMddyyyy}' -f (Get-Date)
+    if ($key) {
+        # Sanitize for Windows filenames (keys are normally PROJECT-1234).
+        $safe = ($key -replace '[^\w\-]', '_')
+        return (Join-Path (Get-JiraAiLogsRoot) ('{0}_{1}.txt' -f $stamp, $safe))
+    }
+    # Poller housekeeping (busy skip, no candidates, etc.) stays on the dated file.
+    Join-Path (Get-JiraAiLogsRoot) ('{0}.txt' -f $stamp)
+}
+
+function Set-JiraAiProcessLogContext {
+    <#
+      Start writing process logs to MMddyyyy_<JIRA_KEY>.txt for this investigation.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$JiraKey
+    )
+    $key = $JiraKey.Trim().ToUpperInvariant()
+    $path = Get-JiraAiProcessLogPath -JiraKey $key
+
+    # One pointer line on the daily log so operators can find the per-Jira file.
+    $script:JiraAiActiveLogKey = $null
+    try {
+        $line = '{0:yyyy-MM-dd HH:mm:ss} [INFO] Investigation log for {1}: {2}' -f (Get-Date), $key, $path
+        Add-Content -LiteralPath (Get-JiraAiProcessLogPath) -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
+        Write-Host $line
+    }
+    catch { }
+    $script:JiraAiActiveLogKey = $key
+    $path
+}
+
+function Clear-JiraAiProcessLogContext {
+    $script:JiraAiActiveLogKey = $null
+}
+
+function Get-JiraAiRunLockPath {
+    Join-Path (Get-JiraAiAutomationRoot) 'run.lock'
+}
+
+function Get-JiraAiCurrentAgentPath {
+    Join-Path (Get-JiraAiAutomationRoot) 'current-agent.json'
+}
+
+function Get-JiraAiLockStaleMinutes {
+    param($AutomationConfig)
+    $minutes = 45
+    if ($AutomationConfig -and $null -ne $AutomationConfig.lockStaleMinutes) {
+        try {
+            $parsed = [int]$AutomationConfig.lockStaleMinutes
+            if ($parsed -gt 0) { $minutes = $parsed }
+        }
+        catch { }
+    }
+    $minutes
 }
 
 function Get-JiraAiAutomationMode {
@@ -35,15 +107,309 @@ function Write-JiraAiLog {
         [Parameter(Mandatory)][string]$Message,
         [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO'
     )
-    $root = Get-JiraAiAutomationRoot
-    $logDir = Join-Path $root 'logs'
-    if (-not (Test-Path -LiteralPath $logDir)) {
-        New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-    }
+    $logDir = Get-JiraAiLogsRoot
     $line = '{0:yyyy-MM-dd HH:mm:ss} [{1}] {2}' -f (Get-Date), $Level, $Message
-    $logFile = Join-Path $logDir ('poller-{0:yyyyMMdd}.log' -f (Get-Date))
-    Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8
+    $logFile = Get-JiraAiProcessLogPath
+    try {
+        Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8
+    }
+    catch { }
     Write-Host $line
+}
+
+function Test-JiraAiAutomationBusy {
+    <#
+      Returns whether automation is currently processing a Jira investigation.
+      Used to skip the scheduled 5-minute assigned-Jira poll while busy.
+    #>
+    $result = [pscustomobject]@{
+        IsBusy    = $false
+        Reason    = ''
+        Pid       = $null
+        JiraKey   = $null
+        StartedAt = $null
+    }
+
+    $lockPath = Get-JiraAiRunLockPath
+    if (Test-Path -LiteralPath $lockPath) {
+        try {
+            $existing = Get-Content -LiteralPath $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $ownerPid = 0
+            if ($existing.pid) { $ownerPid = [int]$existing.pid }
+            if ($existing.startedAt) { $result.StartedAt = [string]$existing.startedAt }
+            if ($ownerPid -gt 0 -and $ownerPid -ne $PID) {
+                $alive = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+                if ($alive) {
+                    $result.IsBusy = $true
+                    $result.Pid = $ownerPid
+                    $result.JiraKey = [string]$existing.jiraKey
+                    $result.Reason = ('run.lock held by pid={0} key={1}' -f $ownerPid, $existing.jiraKey)
+                    return $result
+                }
+            }
+        }
+        catch { }
+    }
+
+    $busyProcs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.ProcessId -ne $PID -and
+            $_.CommandLine -and
+            ($_.CommandLine -match 'Invoke-JiraAssignPoller\.ps1' -or $_.CommandLine -match 'run-jira-ai-fix\.mjs')
+        })
+    if ($busyProcs.Count -gt 0) {
+        $result.IsBusy = $true
+        $result.Pid = [int]$busyProcs[0].ProcessId
+        $result.Reason = ('live automation process pid={0}' -f $busyProcs[0].ProcessId)
+        if ($busyProcs[0].CommandLine -match '(?i)(?:--jira|-IssueKey)\s+([A-Z][A-Z0-9]+-\d+)') {
+            $result.JiraKey = $Matches[1].ToUpperInvariant()
+        }
+        return $result
+    }
+
+    try {
+        $store = Get-ProcessedStore
+        foreach ($key in @($store.Items.Keys)) {
+            $item = $store.Items[$key]
+            if (-not $item) { continue }
+            if ([string]$item.lifecycle -ne 'in-progress') { continue }
+            $ownerPid = 0
+            if ($item.ownerPid) { $ownerPid = [int]$item.ownerPid }
+            if ($ownerPid -gt 0 -and $ownerPid -ne $PID) {
+                $alive = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+                if ($alive) {
+                    $result.IsBusy = $true
+                    $result.Pid = $ownerPid
+                    $result.JiraKey = $key
+                    $result.Reason = ('in-progress investigation {0} ownerPid={1}' -f $key, $ownerPid)
+                    if ($item.startedAt) { $result.StartedAt = [string]$item.startedAt }
+                    return $result
+                }
+            }
+        }
+    }
+    catch { }
+
+    return $result
+}
+
+function Test-JiraAiLockStale {
+    <#
+      True only when the lock is safe to reclaim without -Force:
+      - owner PID is dead / missing, or
+      - no live owner PID and lock/activity age exceeds lockStaleMinutes.
+
+      A live owner PID is NEVER stale for auto-reclaim, even if current-agent.json
+      stopped updating. Clearing the lock under a live process causes dual
+      runners and ECONNRESET (seen on ST-13275). Use -Force to preempt a live run.
+    #>
+    param(
+        $BusyInfo,
+        [int]$StaleMinutes = 45
+    )
+
+    if (-not $BusyInfo -or -not $BusyInfo.IsBusy) { return $false }
+
+    $ownerPid = 0
+    if ($BusyInfo.Pid) { $ownerPid = [int]$BusyInfo.Pid }
+    if ($ownerPid -gt 0) {
+        $alive = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+        if ($alive) {
+            # Live process owns the investigation — do not steal the lock.
+            $cutoff = (Get-Date).AddMinutes(-1 * [Math]::Max(1, $StaleMinutes))
+            $activityPath = Get-JiraAiCurrentAgentPath
+            if (Test-Path -LiteralPath $activityPath) {
+                try {
+                    $activity = Get-Content -LiteralPath $activityPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                    if ($activity.updatedAt) {
+                        $stamp = [datetime]::Parse([string]$activity.updatedAt, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
+                        if ($stamp -lt $cutoff) {
+                            Write-JiraAiLog (
+                                'Heartbeat stale for live pid={0} key={1} (updatedAt={2}); leaving lock (use -Force to preempt).' -f `
+                                    $ownerPid, $BusyInfo.JiraKey, $activity.updatedAt
+                            ) 'WARN'
+                        }
+                    }
+                }
+                catch { }
+            }
+            return $false
+        }
+        # Owner PID recorded but process is gone — orphaned lock.
+        return $true
+    }
+
+    $cutoff = (Get-Date).AddMinutes(-1 * [Math]::Max(1, $StaleMinutes))
+    $activityPath = Get-JiraAiCurrentAgentPath
+    if (Test-Path -LiteralPath $activityPath) {
+        try {
+            $activity = Get-Content -LiteralPath $activityPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $stamp = $null
+            if ($activity.updatedAt) {
+                $stamp = [datetime]::Parse([string]$activity.updatedAt, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
+            }
+            if ($stamp -and $stamp -lt $cutoff) { return $true }
+            if ($stamp -and $stamp -ge $cutoff) { return $false }
+        }
+        catch { }
+    }
+
+    if ($BusyInfo.StartedAt) {
+        try {
+            $started = [datetime]::Parse([string]$BusyInfo.StartedAt, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
+            if ($started -lt $cutoff) { return $true }
+            return $false
+        }
+        catch { }
+    }
+
+    # Busy with neither live PID nor parseable start — reclaim orphan.
+    return $true
+}
+
+function Clear-JiraAiRunLockArtifacts {
+    param([string]$Reason = '')
+    $lockPath = Get-JiraAiRunLockPath
+    $activityPath = Get-JiraAiCurrentAgentPath
+    if (Test-Path -LiteralPath $lockPath) {
+        Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $activityPath) {
+        Remove-Item -LiteralPath $activityPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($Reason) {
+        Write-JiraAiLog ('Cleared run lock artifacts: {0}' -f $Reason) 'WARN'
+    }
+}
+
+function Stop-JiraAiAutomationOwner {
+    <#
+      Best-effort stop of a busy poller/node tree so -Force can take the lock.
+    #>
+    param(
+        [Parameter(Mandatory)][int]$OwnerPid,
+        [string]$JiraKey = ''
+    )
+
+    if ($OwnerPid -le 0 -or $OwnerPid -eq $PID) { return }
+
+    Write-JiraAiLog ('Force-stopping automation owner pid={0} key={1}' -f $OwnerPid, $JiraKey) 'WARN'
+
+    $nodeProcs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.CommandLine -and
+            $_.CommandLine -match 'run-jira-ai-fix\.mjs' -and
+            (
+                ($JiraKey -and $_.CommandLine -match [regex]::Escape($JiraKey)) -or
+                (-not $JiraKey) -or
+                ($_.ParentProcessId -eq $OwnerPid)
+            )
+        })
+    foreach ($node in $nodeProcs) {
+        try {
+            Stop-Process -Id ([int]$node.ProcessId) -Force -ErrorAction SilentlyContinue
+            Write-JiraAiLog ('Stopped node runner pid={0}' -f $node.ProcessId) 'WARN'
+        }
+        catch { }
+    }
+
+    try {
+        Stop-Process -Id $OwnerPid -Force -ErrorAction SilentlyContinue
+    }
+    catch { }
+
+    Start-Sleep -Seconds 2
+}
+
+function Enter-JiraAiRunLock {
+    <#
+      Ensures only one automation poller/investigation runs at a time.
+      Returns $true when this process owns the lock.
+      -Force (manual): stop a live owner and take the lock.
+      Auto-reclaim only when the owner PID is dead / lock is orphaned.
+      Never clear a lock under a live PID (use -Force instead).
+    #>
+    param(
+        [switch]$Force,
+        [int]$StaleMinutes = 45
+    )
+
+    $busy = Test-JiraAiAutomationBusy
+    if ($busy.IsBusy) {
+        $stale = Test-JiraAiLockStale -BusyInfo $busy -StaleMinutes $StaleMinutes
+        if ($stale) {
+            Write-JiraAiLog (
+                'Reclaiming orphaned/dead-owner run lock ({0}; staleMinutes={1}).' -f $busy.Reason, $StaleMinutes
+            ) 'WARN'
+            Clear-JiraAiRunLockArtifacts -Reason $busy.Reason
+        }
+        elseif ($Force) {
+            if ($busy.Pid) {
+                Stop-JiraAiAutomationOwner -OwnerPid ([int]$busy.Pid) -JiraKey ([string]$busy.JiraKey)
+            }
+            Clear-JiraAiRunLockArtifacts -Reason ('forced preempt: {0}' -f $busy.Reason)
+        }
+        else {
+            Write-JiraAiLog ('Another automation process is already running ({0}). Skipping this pass (one Jira at a time).' -f $busy.Reason)
+            return $false
+        }
+
+        # Re-check after reclaim/force in case something else grabbed it.
+        $busyAgain = Test-JiraAiAutomationBusy
+        if ($busyAgain.IsBusy -and -not (Test-JiraAiLockStale -BusyInfo $busyAgain -StaleMinutes $StaleMinutes)) {
+            if (-not $Force) {
+                Write-JiraAiLog ('Lock still held after reclaim attempt ({0}). Skipping.' -f $busyAgain.Reason) 'WARN'
+                return $false
+            }
+            if ($busyAgain.Pid) {
+                Stop-JiraAiAutomationOwner -OwnerPid ([int]$busyAgain.Pid) -JiraKey ([string]$busyAgain.JiraKey)
+            }
+            Clear-JiraAiRunLockArtifacts -Reason ('forced preempt retry: {0}' -f $busyAgain.Reason)
+        }
+        elseif ($busyAgain.IsBusy) {
+            Clear-JiraAiRunLockArtifacts -Reason $busyAgain.Reason
+        }
+    }
+
+    $lockPath = Get-JiraAiRunLockPath
+    $obj = [ordered]@{
+        pid       = $PID
+        startedAt = (Get-Date).ToString('o')
+        jiraKey   = $null
+    }
+    ($obj | ConvertTo-Json -Compress) | Set-Content -LiteralPath $lockPath -Encoding UTF8
+    Write-JiraAiLog ('Acquired run lock (pid={0}). Process log: {1}' -f $PID, (Get-JiraAiProcessLogPath))
+    $true
+}
+
+function Update-JiraAiRunLock {
+    param([string]$JiraKey)
+    $lockPath = Get-JiraAiRunLockPath
+    $startedAt = (Get-Date).ToString('o')
+    if (Test-Path -LiteralPath $lockPath) {
+        try {
+            $existing = Get-Content -LiteralPath $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($existing.startedAt) { $startedAt = [string]$existing.startedAt }
+        }
+        catch { }
+    }
+    $obj = [ordered]@{
+        pid       = $PID
+        startedAt = $startedAt
+        jiraKey   = $JiraKey
+    }
+    ($obj | ConvertTo-Json -Compress) | Set-Content -LiteralPath $lockPath -Encoding UTF8
+}
+
+function Exit-JiraAiRunLock {
+    $lockPath = Get-JiraAiRunLockPath
+    if (-not (Test-Path -LiteralPath $lockPath)) { return }
+    try {
+        $existing = Get-Content -LiteralPath $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($existing.pid -and [int]$existing.pid -ne $PID) { return }
+    }
+    catch { }
+    Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+    Clear-JiraAiProcessLogContext
+    Write-JiraAiLog ('Released run lock (pid={0}).' -f $PID)
 }
 
 function Get-JiraAiAutomationConfig {
@@ -409,9 +775,18 @@ function Start-JiraAiLocalAgent {
     $node = Get-Command node -ErrorAction SilentlyContinue
     if (-not $node) { throw 'Node.js is required for local mode (node not on PATH).' }
 
-    $model = 'auto'
-    if ($AutomationConfig -and $AutomationConfig.localModel) {
-        $model = [string]$AutomationConfig.localModel
+    $investigateModel = 'grok-4.5'
+    if ($AutomationConfig -and $AutomationConfig.investigateModel) {
+        $investigateModel = [string]$AutomationConfig.investigateModel
+    }
+    elseif ($AutomationConfig -and $AutomationConfig.localModel) {
+        # Backward compatible: localModel maps to the investigate phase.
+        $investigateModel = [string]$AutomationConfig.localModel
+    }
+
+    $wrapUpModel = 'auto'
+    if ($AutomationConfig -and $AutomationConfig.wrapUpModel) {
+        $wrapUpModel = [string]$AutomationConfig.wrapUpModel
     }
 
     $sdkNodeModules = Join-Path $runnerDir 'node_modules\@cursor\sdk'
@@ -426,13 +801,22 @@ function Start-JiraAiLocalAgent {
         finally { Pop-Location }
     }
 
-    Write-JiraAiLog ('Starting local jira-ai-fix for {0} (cwd={1}, model={2})' -f $JiraKey, $cwd, $model)
+    # Ensure this investigation has its own log file (even if caller forgot to set context).
+    if ([string]::IsNullOrWhiteSpace($script:JiraAiActiveLogKey) -or
+        $script:JiraAiActiveLogKey.Trim().ToUpperInvariant() -ne $JiraKey.Trim().ToUpperInvariant()) {
+        [void](Set-JiraAiProcessLogContext -JiraKey $JiraKey)
+    }
+
+    $processLogPath = Get-JiraAiProcessLogPath -JiraKey $JiraKey
+    Write-JiraAiLog ('Starting local jira-ai-fix for {0} (cwd={1}, investigate={2}, wrap-up={3})' -f $JiraKey, $cwd, $investigateModel, $wrapUpModel)
+    Write-JiraAiLog ('Realtime process log: {0}' -f $processLogPath)
 
     $argList = @(
         ('"{0}"' -f $script),
         '--jira', $JiraKey,
         '--cwd', ('"{0}"' -f $cwd),
-        '--model', $model
+        '--investigate-model', $investigateModel,
+        '--wrap-up-model', $wrapUpModel
     )
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $node.Source
@@ -452,15 +836,72 @@ function Start-JiraAiLocalAgent {
     if ($apiKey) {
         $psi.EnvironmentVariables['CURSOR_API_KEY'] = $apiKey
     }
+    $psi.EnvironmentVariables['JIRA_AI_PROCESS_LOG'] = $processLogPath
 
+    $stdoutBuilder = New-Object System.Text.StringBuilder
+    $stderrBuilder = New-Object System.Text.StringBuilder
     $proc = New-Object System.Diagnostics.Process
     $proc.StartInfo = $psi
-    [void]$proc.Start()
-    $stdout = $proc.StandardOutput.ReadToEnd()
-    $stderr = $proc.StandardError.ReadToEnd()
-    $proc.WaitForExit()
+    $proc.EnableRaisingEvents = $true
+    $outData = [pscustomobject]@{ Builder = $stdoutBuilder; LogPath = $processLogPath; Prefix = '[runner]' }
+    $errData = [pscustomobject]@{ Builder = $stderrBuilder; LogPath = $processLogPath; Prefix = '[runner:err]' }
+    $streamAction = {
+        if ([string]::IsNullOrEmpty($EventArgs.Data)) { return }
+        try {
+            [void]$Event.MessageData.Builder.AppendLine($EventArgs.Data)
+            $raw = [string]$EventArgs.Data
+            # Runner already writes activity lines into the process log — don't duplicate.
+            if ($raw -match '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \[INFO\]') { return }
+            if ($raw -match '\[local-runner\]') { return }
+            # Drop Cursor SDK internal noise (cache rebuild, rules load, parser warnings).
+            if ($raw -match '(?i)computeGlobalCache|MaxListenersExceededWarning|setMaxListeners|tree-sitter|shell-parser|CursorPluginsAgentSkillsService|AgentSkillsCursorRulesService|LocalCursorRulesService|trace-warnings') { return }
+            # Keep JSON in the stdout builder for the poller parser, but do not dump raw
+            # outcome JSON into the process log (runner writes human-readable lines instead).
+            if ($raw.TrimStart().StartsWith('{')) { return }
+            # Keep only useful high-level process / outcome lines from stdout/stderr.
+            if ($raw -notmatch '(?i)^process:|FAILURE|^\[[A-Z][A-Z0-9]+-\d+\]') { return }
+            $line = '{0:yyyy-MM-dd HH:mm:ss} [INFO] {1} {2}' -f (Get-Date), $Event.MessageData.Prefix, $raw
+            Add-Content -LiteralPath $Event.MessageData.LogPath -Value $line -Encoding UTF8
+        }
+        catch { }
+    }
+
+    $outSub = Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived -Action $streamAction -MessageData $outData
+    $errSub = Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived -Action $streamAction -MessageData $errData
+    $successSeenAt = $null
+    $postSuccessGraceSec = 45
+    try {
+        [void]$proc.Start()
+        $proc.BeginOutputReadLine()
+        $proc.BeginErrorReadLine()
+        while (-not $proc.HasExited) {
+            Start-Sleep -Milliseconds 250
+            # Cursor SDK sometimes keeps node alive after the runner already printed success.
+            if (-not $successSeenAt) {
+                $soFar = $stdoutBuilder.ToString()
+                if ($soFar -match '"ok"\s*:\s*true') {
+                    $successSeenAt = Get-Date
+                    Write-JiraAiLog ('Local runner finished {0} successfully; allowing {1}s for clean exit...' -f $JiraKey, $postSuccessGraceSec)
+                }
+            }
+            elseif (((Get-Date) - $successSeenAt).TotalSeconds -ge $postSuccessGraceSec) {
+                Write-JiraAiLog 'Local runner hung after success; terminating node so email/lock can complete.' 'WARN'
+                try { if (-not $proc.HasExited) { $proc.Kill() } } catch { }
+                break
+            }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    finally {
+        Unregister-Event -SourceIdentifier $outSub.Name -ErrorAction SilentlyContinue
+        Unregister-Event -SourceIdentifier $errSub.Name -ErrorAction SilentlyContinue
+        Remove-Job -Id $outSub.Id -Force -ErrorAction SilentlyContinue
+        Remove-Job -Id $errSub.Id -Force -ErrorAction SilentlyContinue
+    }
+
     $code = $proc.ExitCode
-    if ($stderr) { Write-JiraAiLog ($stderr.Trim()) $(if ($code -eq 0) { 'INFO' } else { 'WARN' }) }
+    $stdout = $stdoutBuilder.ToString()
+    $stderr = $stderrBuilder.ToString()
 
     $summary = $null
     foreach ($line in ($stdout -split "`r?`n")) {
@@ -476,12 +917,27 @@ function Start-JiraAiLocalAgent {
         $draftPath = Join-Path (Get-JiraAiDraftsRoot) ('{0}-rca.md' -f $JiraKey)
     }
 
+    # Prefer runner summary over raw exit code — forced kill after hang is -1 on Windows.
+    $summaryOk = $false
+    if ($summary) {
+        if ($summary.PSObject.Properties.Name -contains 'ok' -and [bool]$summary.ok) {
+            $summaryOk = $true
+        }
+        elseif ([string]$summary.status -eq 'finished' -and $draftPath -and (Test-Path -LiteralPath $draftPath)) {
+            $summaryOk = $true
+        }
+    }
+    $ok = ($code -eq 0) -or $summaryOk
+    if ($summaryOk -and $code -ne 0) {
+        Write-JiraAiLog ('Treating local run as OK despite exit={0} (runner reported success / draft present).' -f $code) 'WARN'
+    }
+
     [pscustomobject]@{
-        Ok           = ($code -eq 0)
+        Ok           = $ok
         DryRun       = $false
         Prompt       = $prompt
         DraftPath    = $draftPath
-        FailurePath  = if ($summary -and $summary.failurePath) { [string]$summary.failurePath } else { $null }
+        FailurePath  = (Get-JiraAiProcessLogPath)
         FailurePhase = if ($summary -and $summary.phase) { [string]$summary.phase } else { $null }
         FailureWhy   = if ($summary -and $summary.why) { [string]$summary.why } else { $null }
         RootCause    = if ($summary -and $summary.rootCause) { [string]$summary.rootCause } else { $null }
@@ -682,10 +1138,8 @@ function Remove-JiraAiRcaDraft {
 
 function Write-JiraAiFailureReport {
     <#
-      Writes %USERPROFILE%\.jira-ai-automation\logs\failures\<KEY>-failure.txt
-      describing why a process failed, which part failed, and the root cause.
-      Also preserves/creates the RCA draft with the same failure note so the
-      poller will not keep reinvestigating the same failing Jira forever.
+      Logs failure details into the dated realtime process log and annotates/creates
+      the RCA draft so the poller will not keep reinvestigating forever.
     #>
     param(
         [Parameter(Mandatory)][string]$JiraKey,
@@ -701,38 +1155,29 @@ function Write-JiraAiFailureReport {
     )
 
     $key = $JiraKey.ToUpperInvariant()
-    $dir = Get-JiraAiFailureLogsRoot
-    $path = Join-Path $dir ('{0}-failure.txt' -f $key)
-    $lines = @(
-        ('Jira: {0}' -f $key)
-        ('Time: {0}' -f (Get-Date).ToString('o'))
-        ('Process: {0}' -f $ProcessName)
-        ('Failed part: {0}' -f $Phase)
-        ('Why it failed: {0}' -f $Why)
-        ('Root cause: {0}' -f $RootCause)
-        ('Status: {0}' -f $Status)
-        ('Exit code: {0}' -f $ExitCode)
-        ('Cwd: {0}' -f $Cwd)
-        ('Run id: {0}' -f $RunId)
-        ''
-        'Details / stack:'
-        $(if ([string]::IsNullOrWhiteSpace($Details)) { '(none)' } else { $Details })
-        ''
-    )
-    Set-Content -LiteralPath $path -Value ($lines -join [Environment]::NewLine) -Encoding UTF8
-    Write-JiraAiLog ('Failure report written: {0}' -f $path)
+    $processLog = Get-JiraAiProcessLogPath
+    Write-JiraAiLog ('FAILURE jira={0} process={1}' -f $key, $ProcessName) 'ERROR'
+    Write-JiraAiLog ('FAILURE failed-part={0}' -f $Phase) 'ERROR'
+    Write-JiraAiLog ('FAILURE why={0}' -f $Why) 'ERROR'
+    Write-JiraAiLog ('FAILURE root-cause={0}' -f $RootCause) 'ERROR'
+    Write-JiraAiLog ('FAILURE status={0} exit={1} cwd={2} runId={3}' -f $Status, $ExitCode, $Cwd, $RunId) 'ERROR'
+    if (-not [string]::IsNullOrWhiteSpace($Details)) {
+        foreach ($detailLine in ($Details -split "`r?`n")) {
+            if ($detailLine) { Write-JiraAiLog ('FAILURE detail: {0}' -f $detailLine) 'ERROR' }
+        }
+    }
 
     Save-JiraAiFailureNoteInDraft `
         -JiraKey $key `
         -Phase $Phase `
         -Why $Why `
         -RootCause $RootCause `
-        -FailureLogPath $path `
+        -FailureLogPath $processLog `
         -ProcessName $ProcessName `
         -ExitCode $ExitCode `
         -Status $Status | Out-Null
 
-    return $path
+    return $processLog
 }
 
 function Save-JiraAiFailureNoteInDraft {
@@ -759,6 +1204,9 @@ function Save-JiraAiFailureNoteInDraft {
     $mdPath = Join-Path $drafts ('{0}-rca.md' -f $key)
     $metaPath = Join-Path $drafts ('{0}-meta.json' -f $key)
     $stamp = (Get-Date).ToString('o')
+    if ([string]::IsNullOrWhiteSpace($FailureLogPath)) {
+        $FailureLogPath = Get-JiraAiProcessLogPath
+    }
 
     $note = @(
         ''
@@ -773,10 +1221,10 @@ function Save-JiraAiFailureNoteInDraft {
         ('- Root cause: {0}' -f $RootCause)
         ('- Status: {0}' -f $Status)
         ('- Exit code: {0}' -f $ExitCode)
-        ('- Failure log: {0}' -f $FailureLogPath)
+        ('- Process log: {0}' -f $FailureLogPath)
         ''
         'Automation will not reinvestigate this Jira while this RCA draft exists.'
-        'Delete this draft (and optionally the failure log) only when a fresh investigation is intentional.'
+        'Delete this draft only when a fresh investigation is intentional.'
         ''
     ) -join [Environment]::NewLine
 
@@ -786,7 +1234,6 @@ function Save-JiraAiFailureNoteInDraft {
             Set-Content -LiteralPath $mdPath -Value ($existing.TrimEnd() + [Environment]::NewLine + $note) -Encoding UTF8
         }
         else {
-            # Replace the previous automation-failure section with the latest failure note.
             $updated = [regex]::Replace(
                 $existing,
                 '(?ms)^---\s*^## Automation failure.*',
@@ -808,14 +1255,14 @@ function Save-JiraAiFailureNoteInDraft {
     }
 
     $meta = [ordered]@{
-        jiraKey        = $key
-        mode           = 'local'
-        investigation  = 'failed'
-        finishedAt     = $stamp
-        failurePhase   = $Phase
-        failureWhy     = $Why
-        failureRootCause = $RootCause
-        failureLogPath = $FailureLogPath
+        jiraKey           = $key
+        mode              = 'local'
+        investigation     = 'failed'
+        finishedAt        = $stamp
+        failurePhase      = $Phase
+        failureWhy        = $Why
+        failureRootCause  = $RootCause
+        processLogPath    = $FailureLogPath
         jiraCommentPosted = $false
     }
     ($meta | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath $metaPath -Encoding UTF8
@@ -914,6 +1361,23 @@ function Get-JiraAiDraftInventory {
     $items | Sort-Object @{ Expression = 'Featured'; Descending = $true }, @{ Expression = 'LastWriteTime'; Descending = $true }
 }
 
+function Remove-JiraAiOutboxEmlIfSent {
+    param(
+        [string]$EmlPath,
+        [string]$Delivery
+    )
+    if ($Delivery -ne 'send') { return }
+    if ([string]::IsNullOrWhiteSpace($EmlPath)) { return }
+    if (-not (Test-Path -LiteralPath $EmlPath)) { return }
+    try {
+        Remove-Item -LiteralPath $EmlPath -Force
+        Write-JiraAiLog ('Deleted outbox .eml after successful send: {0}' -f $EmlPath)
+    }
+    catch {
+        Write-JiraAiLog ('Could not delete outbox .eml {0}: {1}' -f $EmlPath, $_.Exception.Message) 'WARN'
+    }
+}
+
 function ConvertTo-JiraAiHtmlEncoded {
     param([string]$Text)
     if ($null -eq $Text) { return '' }
@@ -925,6 +1389,9 @@ function Send-JiraAiLifecycleEmail {
       Sends one status email for a local investigation lifecycle event.
       Phase is started, resumed, or failed. Completed runs continue through
       Send-JiraAiDraftsEmail so the completed message includes the RCA body.
+
+      For failed emails, pass FailedPart / Why / RootCause so the message
+      clearly names which process step failed and why.
     #>
     param(
         $AutomationConfig,
@@ -933,7 +1400,10 @@ function Send-JiraAiLifecycleEmail {
         [string]$Summary,
         [string]$JiraStatus,
         [string]$BrowseUrl,
-        [string]$Details
+        [string]$Details,
+        [string]$FailedPart,
+        [string]$Why,
+        [string]$RootCause
     )
 
     if (-not $AutomationConfig -or $AutomationConfig.notifyEmail -eq $false) {
@@ -954,14 +1424,42 @@ function Send-JiraAiLifecycleEmail {
         return $null
     }
 
+    $failedPartLabel = $null
+    if ($Phase -eq 'failed') {
+        $rawPart = if ($FailedPart) { $FailedPart.Trim() } else { '' }
+        $failedPartLabel = switch -Regex ($rawPart) {
+            '(?i)preflight-auth|auth-missing|api.?key' { 'Preflight — API key / auth' }
+            '(?i)preflight-cwd|cwd-missing|repo.?root' { 'Preflight — repo path / cwd' }
+            '(?i)local-agent-startup|agent-startup|startup|network.?request' { 'Local agent startup' }
+            '(?i)local-agent-execution|local-agent-execution|execution' { 'Local agent investigation' }
+            '(?i)checking.?jira|^jira$' { 'Checking Jira ticket' }
+            '(?i)hdtn|helpdesk' { 'Checking HDTN ticket' }
+            '(?i)attachment' { 'Checking attachments' }
+            '(?i)coding|implement|fix' { 'Coding / implementing fix' }
+            '(?i)draft|rca' { 'Creating draft comment' }
+            '(?i)email|outlook' { 'Sending email' }
+            '(?i)poller-exception|poller' { 'Automation poller' }
+            default {
+                if ($rawPart) { $rawPart } else { 'Unknown process step' }
+            }
+        }
+    }
+
     $phaseLabel = switch ($Phase) {
         'started' { 'Investigation started' }
         'resumed' { 'Investigation resumed' }
-        'failed'  { 'Investigation failed' }
+        'failed'  {
+            if ($failedPartLabel) { 'Investigation failed — {0}' -f $failedPartLabel }
+            else { 'Investigation failed' }
+        }
     }
     $statusLabel = if ([string]::IsNullOrWhiteSpace($JiraStatus)) { 'Unknown' } else { $JiraStatus.Trim() }
     $subject = if ($Phase -eq 'failed') {
-        '[{0}] {1}' -f $JiraKey, $phaseLabel
+        if ($failedPartLabel) {
+            '[{0}] Failed at {1}' -f $JiraKey, $failedPartLabel
+        } else {
+            '[{0}] Investigation failed' -f $JiraKey
+        }
     } else {
         '[{0}] {1} - {2}' -f $JiraKey, $phaseLabel, $statusLabel
     }
@@ -971,6 +1469,9 @@ function Send-JiraAiLifecycleEmail {
     $safeStatus = ConvertTo-JiraAiHtmlEncoded $statusLabel
     $safeDetails = ConvertTo-JiraAiHtmlEncoded $Details
     $safeUrl = ConvertTo-JiraAiHtmlEncoded $BrowseUrl
+    $safeFailedPart = ConvertTo-JiraAiHtmlEncoded $failedPartLabel
+    $safeWhy = ConvertTo-JiraAiHtmlEncoded $Why
+    $safeRoot = ConvertTo-JiraAiHtmlEncoded $RootCause
     $actionText = switch ($Phase) {
         'started' { 'The Jira assignment was detected and the local Cursor investigation is now running.' }
         'resumed' { 'An interrupted local investigation was detected and has been restarted.' }
@@ -986,6 +1487,25 @@ function Send-JiraAiLifecycleEmail {
             (ConvertTo-JiraAiHtmlEncoded $phaseLabel),
             (ConvertTo-JiraAiHtmlEncoded $((Get-Date).ToString('o'))))) | Out-Null
     $htmlParts.Add(('<p>{0}</p>' -f (ConvertTo-JiraAiHtmlEncoded $actionText))) | Out-Null
+
+    if ($Phase -eq 'failed') {
+        $htmlParts.Add('<div style="background:#fff5f5;border:1px solid #f1c0c0;padding:12px;border-radius:4px;margin:12px 0">') | Out-Null
+        $htmlParts.Add('<h3 style="margin:0 0 8px 0;color:#a11">Failure details</h3>') | Out-Null
+        if ($safeFailedPart) {
+            $htmlParts.Add(('<p style="margin:4px 0"><b>Failed process step:</b> {0}</p>' -f $safeFailedPart)) | Out-Null
+        }
+        if ($safeWhy) {
+            $htmlParts.Add(('<p style="margin:4px 0"><b>Why it failed:</b> {0}</p>' -f $safeWhy)) | Out-Null
+        }
+        if ($safeRoot) {
+            $htmlParts.Add(('<p style="margin:4px 0"><b>Root cause:</b> {0}</p>' -f $safeRoot)) | Out-Null
+        }
+        if (-not $safeFailedPart -and -not $safeWhy -and -not $safeRoot -and $safeDetails) {
+            $htmlParts.Add('<p style="margin:4px 0"><b>Details:</b></p>') | Out-Null
+        }
+        $htmlParts.Add('</div>') | Out-Null
+    }
+
     if ($safeDetails) {
         $htmlParts.Add(('<pre style="white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:12px;border-radius:4px">{0}</pre>' -f $safeDetails)) | Out-Null
     }
@@ -1010,6 +1530,8 @@ function Send-JiraAiLifecycleEmail {
         $html
     ) -join "`r`n"
     [System.IO.File]::WriteAllText($emlPath, $eml, [System.Text.UTF8Encoding]::new($false))
+
+    Write-JiraAiLog ('process: sending email ({0}) for {1}' -f $Phase, $JiraKey)
 
     $delivery = 'send'
     if ($AutomationConfig.emailDelivery) {
@@ -1057,25 +1579,33 @@ function Send-JiraAiLifecycleEmail {
         catch { Write-JiraAiLog ('Could not open lifecycle .eml: {0}' -f $_.Exception.Message) 'WARN' }
     }
 
-    Write-JiraAiLog ('Lifecycle email {0} for {1}: {2} ({3}).' -f $sentOrSaved, $JiraKey, $Phase, $emlPath)
+    Remove-JiraAiOutboxEmlIfSent -EmlPath $emlPath -Delivery $sentOrSaved
+
+    if ($sentOrSaved -eq 'send') {
+        Write-JiraAiLog ('process: Done sending email ({0}) for {1}' -f $Phase, $JiraKey)
+    }
+    elseif ($sentOrSaved -eq 'draft') {
+        Write-JiraAiLog ('process: Done creating email draft ({0}) for {1}' -f $Phase, $JiraKey)
+    }
+    else {
+        Write-JiraAiLog ('process: Failed sending email ({0}) for {1} — left .eml in outbox' -f $Phase, $JiraKey) 'WARN'
+    }
+
+    Write-JiraAiLog ('Lifecycle email {0} for {1}: {2} ({3}).' -f $sentOrSaved, $JiraKey, $Phase, $(if ($sentOrSaved -eq 'send') { 'eml deleted' } else { $emlPath }))
     [pscustomobject]@{
         To       = $to
         Subject  = $subject
         Delivery = $sentOrSaved
-        EmlPath  = $emlPath
+        EmlPath  = if ($sentOrSaved -eq 'send') { $null } else { $emlPath }
         Phase    = $Phase
     }
 }
 
 function Send-JiraAiDraftsEmail {
     <#
-      Emails local RCA drafts. Featured keys (just finished) appear first; remaining
-      investigated drafts from ~/.jira-ai-drafts follow.
-
-      Delivery:
-      - Always writes an .eml under ~/.jira-ai-drafts/outbox/ (reliable fallback).
-      - emailDelivery=send|draft tries Outlook COM (with timeout); falls back to .eml.
-      - emailDelivery=eml|display opens/leaves the .eml for the mail client.
+      Emails the RCA draft for the Jira(s) that just finished investigation.
+      Only FeaturedKeys are included (not prior drafts), and the RCA body is
+      formatted for easy copy/paste into Jira.
     #>
     param(
         $AutomationConfig,
@@ -1096,81 +1626,111 @@ function Send-JiraAiDraftsEmail {
         return $null
     }
 
+    $featuredKeys = @($FeaturedKeys | Where-Object { $_ } | ForEach-Object { $_.ToString().Trim().ToUpperInvariant() } | Select-Object -Unique)
+    if ($featuredKeys.Count -eq 0) {
+        Write-JiraAiLog 'Draft email skipped: no featured (just-finished) Jira key provided.' 'WARN'
+        return $null
+    }
+
     $exclude = @('(?i)^ST-SMOKE', '(?i)^ST-99999$')
     if ($AutomationConfig -and $AutomationConfig.emailExcludeKeyRegexes) {
         $exclude = @($AutomationConfig.emailExcludeKeyRegexes)
     }
 
-    $drafts = @(Get-JiraAiDraftInventory -FeaturedKeys $FeaturedKeys -ExcludeKeyRegexes $exclude)
+    $allDrafts = @(Get-JiraAiDraftInventory -FeaturedKeys $featuredKeys -ExcludeKeyRegexes $exclude)
+    # Completion email: only the Jira(s) that just finished — never prior drafts.
+    $drafts = @($allDrafts | Where-Object { $_.Featured -and -not $_.IsPlaceholder })
     if ($drafts.Count -eq 0) {
-        Write-JiraAiLog 'Draft email skipped: no RCA drafts found.' 'WARN'
+        Write-JiraAiLog ('Draft email skipped: no completed RCA draft for featured key(s) {0}.' -f ($featuredKeys -join ', ')) 'WARN'
         return $null
     }
 
-    $featured = @($drafts | Where-Object { $_.Featured })
-    $featuredLabel = if ($featured.Count -gt 0) {
-        ($featured | ForEach-Object { $_.Key }) -join ', '
+    $featuredLabel = ($drafts | ForEach-Object { $_.Key }) -join ', '
+    $subject = if ($drafts.Count -eq 1) {
+        '[{0}] RCA draft ready — copy/paste into Jira' -f $drafts[0].Key
     } else {
-        ($drafts | Select-Object -First 3 | ForEach-Object { $_.Key }) -join ', '
-    }
-
-    $subject = if ($featured.Count -eq 1) {
-        'Jira AI drafts ready: {0} (+{1} prior)' -f $featured[0].Key, [Math]::Max(0, $drafts.Count - 1)
-    } elseif ($featured.Count -gt 1) {
-        'Jira AI drafts ready: {0} (+{1} prior)' -f $featuredLabel, [Math]::Max(0, $drafts.Count - $featured.Count)
-    } else {
-        'Jira AI investigated drafts ({0})' -f $drafts.Count
+        'Jira AI RCA drafts ready ({0}) — copy/paste into Jira' -f $featuredLabel
     }
 
     $sections = New-Object System.Collections.Generic.List[string]
     $sections.Add('<html><body style="font-family:Segoe UI,Arial,sans-serif;font-size:13px;color:#222">') | Out-Null
-    $sections.Add('<p>Jira AI automation finished analysis. Draft RCA comments below (local only - not posted to Jira).</p>') | Out-Null
-    if ($featured.Count -gt 0) {
-        $featKeys = ($featured | ForEach-Object { $_.Key }) -join ', '
-        $sections.Add(('<p><b>Just completed:</b> {0}</p>' -f (ConvertTo-JiraAiHtmlEncoded $featKeys))) | Out-Null
-    }
-    $sections.Add('<hr/>') | Out-Null
+    $sections.Add('<p><b>Investigation complete.</b> Copy the RCA below and paste it into the Jira comment.</p>') | Out-Null
+    $sections.Add('<p style="color:#666;font-size:12px">Local draft only — not posted to Jira automatically.</p>') | Out-Null
 
     foreach ($d in $drafts) {
-        $badge = if ($d.Featured) { ' <span style="background:#dff0d8;padding:2px 6px;border-radius:3px;">new</span>' } else { '' }
-        if ($d.IsPlaceholder) { $badge += ' <span style="background:#fcf8e3;padding:2px 6px;border-radius:3px;">placeholder</span>' }
-        $sections.Add(('<h2 style="margin-bottom:4px">{0}{1}</h2>' -f (ConvertTo-JiraAiHtmlEncoded $d.Key), $badge)) | Out-Null
+        $pasteBody = [string]$d.Body
+        # Strip automation failure markers so paste content stays RCA-only.
+        $pasteBody = [regex]::Replace(
+            $pasteBody,
+            '(?ms)\r?\n---\r?\n\r?\n## Automation failure\r?\n.*\z',
+            ''
+        )
+        $pasteBody = [regex]::Replace(
+            $pasteBody,
+            '(?ms)\r?\n## Automation failure\r?\n.*\z',
+            ''
+        )
+        $pasteBody = $pasteBody.Trim()
+
+        $sections.Add(('<h2 style="margin-bottom:4px">{0}</h2>' -f (ConvertTo-JiraAiHtmlEncoded $d.Key))) | Out-Null
         if ($d.Summary) {
             $sections.Add(('<p style="margin-top:0;color:#555">{0}</p>' -f (ConvertTo-JiraAiHtmlEncoded $d.Summary))) | Out-Null
         }
-        if ($d.AgentUrl) {
-            $safeUrl = ConvertTo-JiraAiHtmlEncoded $d.AgentUrl
-            $sections.Add(('<p><a href="{0}">Agent link</a></p>' -f $safeUrl)) | Out-Null
+        $sections.Add('<p style="margin:12px 0 6px 0"><b>Copy everything in the box below:</b></p>') | Out-Null
+        # Selectable plain RCA block — no extra chrome inside the copy area.
+        $sections.Add(('<pre style="white-space:pre-wrap;word-wrap:break-word;background:#ffffff;border:2px solid #333;padding:14px;border-radius:4px;font-family:Consolas,Courier New,monospace;font-size:12px;line-height:1.45;user-select:all;-webkit-user-select:all">{0}</pre>' -f (ConvertTo-JiraAiHtmlEncoded $pasteBody))) | Out-Null
+        if ($d.Path) {
+            $sections.Add(('<p style="color:#888;font-size:11px">Local file: {0}</p>' -f (ConvertTo-JiraAiHtmlEncoded $d.Path))) | Out-Null
         }
-        $sections.Add(('<p style="color:#888;font-size:11px">{0}</p>' -f (ConvertTo-JiraAiHtmlEncoded $d.Path))) | Out-Null
-        $sections.Add(('<pre style="white-space:pre-wrap;background:#f7f7f7;border:1px solid #ddd;padding:12px;border-radius:4px">{0}</pre>' -f (ConvertTo-JiraAiHtmlEncoded $d.Body))) | Out-Null
         $sections.Add('<hr/>') | Out-Null
     }
 
-    $sections.Add('<p style="color:#888;font-size:11px">Review in Cursor, then ask: post jira comment draft for &lt;KEY&gt;</p>') | Out-Null
     $sections.Add('</body></html>') | Out-Null
     $html = $sections -join [Environment]::NewLine
+
+    # Plain-text alternative: pure RCA for clients that prefer text copy.
+    $plainParts = New-Object System.Collections.Generic.List[string]
+    foreach ($d in $drafts) {
+        $plainBody = [string]$d.Body
+        $plainBody = [regex]::Replace($plainBody, '(?ms)\r?\n---\r?\n\r?\n## Automation failure\r?\n.*\z', '')
+        $plainBody = [regex]::Replace($plainBody, '(?ms)\r?\n## Automation failure\r?\n.*\z', '')
+        $plainParts.Add(('===== {0} RCA (copy below) =====' -f $d.Key)) | Out-Null
+        $plainParts.Add($plainBody.Trim()) | Out-Null
+        $plainParts.Add('') | Out-Null
+    }
+    $plainText = $plainParts -join "`r`n"
 
     $outbox = Join-Path (Get-JiraAiDraftsRoot) 'outbox'
     if (-not (Test-Path -LiteralPath $outbox)) {
         New-Item -ItemType Directory -Force -Path $outbox | Out-Null
     }
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $featSlug = if ($featured.Count -gt 0) { ($featured[0].Key -replace '[^\w\-]', '_') } else { 'drafts' }
+    $featSlug = ($drafts[0].Key -replace '[^\w\-]', '_')
     $emlPath = Join-Path $outbox ('{0}-{1}.eml' -f $stamp, $featSlug)
 
-    # RFC822-ish .eml Outlook / default mail client can open.
+    $boundary = 'jira_ai_boundary_{0}' -f ([guid]::NewGuid().ToString('N'))
     $eml = @(
         ('To: {0}' -f $to)
         ('Subject: {0}' -f $subject)
         'X-Unsent: 1'
         'MIME-Version: 1.0'
+        ('Content-Type: multipart/alternative; boundary="{0}"' -f $boundary)
+        ''
+        ('--{0}' -f $boundary)
+        'Content-Type: text/plain; charset=utf-8'
+        'Content-Transfer-Encoding: 8bit'
+        ''
+        $plainText
+        ('--{0}' -f $boundary)
         'Content-Type: text/html; charset=utf-8'
         'Content-Transfer-Encoding: 8bit'
         ''
         $html
+        ('--{0}--' -f $boundary)
     ) -join "`r`n"
     [System.IO.File]::WriteAllText($emlPath, $eml, [System.Text.UTF8Encoding]::new($false))
+
+    Write-JiraAiLog ('process: sending draft email for {0}' -f $featuredLabel)
 
     $delivery = 'send'
     if ($AutomationConfig -and $AutomationConfig.emailDelivery) {
@@ -1184,13 +1744,15 @@ function Send-JiraAiDraftsEmail {
     if ($delivery -in @('send', 'draft')) {
         $modeArg = $delivery
         $job = Start-Job -ScriptBlock {
-            param($To, $Subject, $HtmlBody, $Mode)
+            param($To, $Subject, $HtmlBody, $PlainBody, $Mode)
             $outlook = New-Object -ComObject Outlook.Application
             $mail = $outlook.CreateItem(0)
             $mail.To = $To
             $mail.Subject = $Subject
             $mail.BodyFormat = 2
             $mail.HTMLBody = $HtmlBody
+            # Plain body helps some clients / paste workflows.
+            try { $mail.Body = $PlainBody } catch { }
             if ($Mode -eq 'draft') {
                 $mail.Save()
                 'draft'
@@ -1199,7 +1761,7 @@ function Send-JiraAiDraftsEmail {
                 $mail.Send()
                 'send'
             }
-        } -ArgumentList $to, $subject, $html, $modeArg
+        } -ArgumentList $to, $subject, $html, $plainText, $modeArg
 
         $completed = Wait-Job -Job $job -Timeout 20
         if ($completed -and $job.State -eq 'Completed') {
@@ -1224,22 +1786,34 @@ function Send-JiraAiDraftsEmail {
         }
     }
 
-    Write-JiraAiLog ('Draft email {0} for {1} ({2} draft(s); featured={3}; eml={4}).' -f $sentOrSaved, $to, $drafts.Count, $featuredLabel, $emlPath)
+    Remove-JiraAiOutboxEmlIfSent -EmlPath $emlPath -Delivery $sentOrSaved
+
+    if ($sentOrSaved -eq 'send') {
+        Write-JiraAiLog ('process: Done sending draft email for {0}' -f $featuredLabel)
+    }
+    elseif ($sentOrSaved -eq 'draft') {
+        Write-JiraAiLog 'process: Done creating draft email in Outlook'
+    }
+    else {
+        Write-JiraAiLog 'process: Failed sending draft email — left .eml in outbox' 'WARN'
+    }
+
+    Write-JiraAiLog ('Draft email {0} for {1} ({2} just-finished draft(s); eml={3}).' -f $sentOrSaved, $to, $drafts.Count, $(if ($sentOrSaved -eq 'send') { 'deleted' } else { $emlPath }))
     if ($AutomationConfig.notifyToast -ne $false) {
         $toastMsg = if ($sentOrSaved -eq 'send') {
-            'Emailed {0} draft(s) to {1}' -f $drafts.Count, $to
+            'Emailed RCA draft for {0}' -f $featuredLabel
         } else {
-            'Drafts mail ready ({0}) - check Outlook / outbox' -f $featSlug
+            'RCA draft mail ready for {0} - check Outlook / outbox' -f $featuredLabel
         }
-        Show-JiraAiToast -Title 'Jira AI drafts email' -Message $toastMsg
+        Show-JiraAiToast -Title 'Jira AI RCA draft email' -Message $toastMsg
     }
 
     [pscustomobject]@{
         To           = $to
         Subject      = $subject
         Delivery     = $sentOrSaved
-        EmlPath      = $emlPath
+        EmlPath      = if ($sentOrSaved -eq 'send') { $null } else { $emlPath }
         DraftCount   = $drafts.Count
-        FeaturedKeys = @($featured | ForEach-Object { $_.Key })
+        FeaturedKeys = @($drafts | ForEach-Object { $_.Key })
     }
 }

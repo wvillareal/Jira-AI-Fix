@@ -2,11 +2,49 @@
 [CmdletBinding()]
 param(
     [switch]$DryRun,
-    [string]$IssueKey
+    [string]$IssueKey,
+    [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'JiraAiAutomation.ps1')
+
+$autoForLock = $null
+try { $autoForLock = Get-JiraAiAutomationConfig } catch { }
+$staleMinutes = Get-JiraAiLockStaleMinutes -AutomationConfig $autoForLock
+
+# Scheduled 5-minute assigned-Jira poll must not run while an investigation is active.
+# Manual -IssueKey runs still go through the run lock below.
+# -Force is allowed only with -IssueKey (jump the queue by stopping the current owner).
+if ($Force -and [string]::IsNullOrWhiteSpace($IssueKey)) {
+    Write-JiraAiLog '-Force is only valid with -IssueKey (manual preempt).' 'WARN'
+    return
+}
+
+if ([string]::IsNullOrWhiteSpace($IssueKey)) {
+    $busy = Test-JiraAiAutomationBusy
+    if ($busy.IsBusy) {
+        if (Test-JiraAiLockStale -BusyInfo $busy -StaleMinutes $staleMinutes) {
+            Write-JiraAiLog (
+                'Scheduled poll found stale lock ({0}); will reclaim via Enter-JiraAiRunLock.' -f $busy.Reason
+            ) 'WARN'
+        }
+        else {
+            Write-JiraAiLog ('Skipping scheduled assigned-Jira poll: automation is busy ({0}).' -f $busy.Reason)
+            return
+        }
+    }
+}
+
+$enterArgs = @{
+    StaleMinutes = $staleMinutes
+}
+if ($Force) { $enterArgs.Force = $true }
+if (-not (Enter-JiraAiRunLock @enterArgs)) {
+    return
+}
+
+try {
 
 $auto = Get-JiraAiAutomationConfig
 $userBundle = Get-JiraAiUserConfig
@@ -78,6 +116,7 @@ if ($issues.Count -eq 0) {
 }
 
 $featuredForEmail = New-Object System.Collections.Generic.List[string]
+$localInvestigationsThisPass = 0
 
 foreach ($issue in $issues) {
     $key = $issue.Key
@@ -105,7 +144,14 @@ foreach ($issue in $issues) {
         continue
     }
 
+    if ($mode -eq 'local' -and $localInvestigationsThisPass -ge 1) {
+        Write-JiraAiLog ('Deferring {0}: one Jira investigation at a time (will pick up on a later poll).' -f $key)
+        continue
+    }
+
+    [void](Set-JiraAiProcessLogContext -JiraKey $key)
     Write-JiraAiLog ('Processing {0}: {1}' -f $key, $issue.Summary)
+    Update-JiraAiRunLock -JiraKey $key
     $repo = Resolve-RepoForIssue -Issue $issue -AutomationConfig $auto
     $browseUrl = '{0}/browse/{1}' -f $auth.SiteUrl, $key
 
@@ -152,10 +198,12 @@ foreach ($issue in $issues) {
         }
         Save-ProcessedStore -Store $store
         if (-not $DryRun) { $featuredForEmail.Add($key) | Out-Null }
+        Clear-JiraAiProcessLogContext
         continue
     }
 
     # mode = local (Cursor SDK on this machine — real jira-ai-fix skill)
+    $localInvestigationsThisPass++
     $startedAt = (Get-Date).ToString('o')
     if (-not $DryRun) {
         $store.Items[$key] = @{
@@ -202,32 +250,17 @@ foreach ($issue in $issues) {
         $failurePath = $null
         $draftAfterFailure = $null
         if (-not $local.Ok -and -not $DryRun) {
-            $failurePath = $local.FailurePath
-            if (-not $failurePath -or -not (Test-Path -LiteralPath $failurePath)) {
-                $failurePath = Write-JiraAiFailureReport `
-                    -JiraKey $key `
-                    -ProcessName 'local Cursor SDK agent' `
-                    -Phase $(if ($local.FailurePhase) { $local.FailurePhase } else { 'local-agent-execution' }) `
-                    -Why $(if ($local.FailureWhy) { $local.FailureWhy } else { ('Local agent exited with code {0} (status={1}).' -f $local.ExitCode, $local.Status) }) `
-                    -RootCause $(if ($local.RootCause) { $local.RootCause } else { 'Runner returned non-zero without a structured failure report.' }) `
-                    -Details ($(if ($local.StdErr) { $local.StdErr } else { $local.RawOutput })) `
-                    -ExitCode $local.ExitCode `
-                    -Status ([string]$local.Status) `
-                    -Cwd ([string]$local.Cwd) `
-                    -RunId ([string]$local.RunId)
-            }
-            else {
-                # Runner already wrote logs/failures; still preserve/annotate the RCA draft.
-                Save-JiraAiFailureNoteInDraft `
-                    -JiraKey $key `
-                    -Phase $(if ($local.FailurePhase) { $local.FailurePhase } else { 'local-agent-execution' }) `
-                    -Why $(if ($local.FailureWhy) { $local.FailureWhy } else { ('Local agent exited with code {0} (status={1}).' -f $local.ExitCode, $local.Status) }) `
-                    -RootCause $(if ($local.RootCause) { $local.RootCause } else { 'Runner returned non-zero without a structured failure report.' }) `
-                    -FailureLogPath $failurePath `
-                    -ProcessName 'local Cursor SDK agent' `
-                    -ExitCode $local.ExitCode `
-                    -Status ([string]$local.Status) | Out-Null
-            }
+            $failurePath = Write-JiraAiFailureReport `
+                -JiraKey $key `
+                -ProcessName 'local Cursor SDK agent' `
+                -Phase $(if ($local.FailurePhase) { $local.FailurePhase } else { 'local-agent-execution' }) `
+                -Why $(if ($local.FailureWhy) { $local.FailureWhy } else { ('Local agent exited with code {0} (status={1}).' -f $local.ExitCode, $local.Status) }) `
+                -RootCause $(if ($local.RootCause) { $local.RootCause } else { 'Runner returned non-zero without a structured failure report.' }) `
+                -Details ($(if ($local.StdErr) { $local.StdErr } else { $local.RawOutput })) `
+                -ExitCode $local.ExitCode `
+                -Status ([string]$local.Status) `
+                -Cwd ([string]$local.Cwd) `
+                -RunId ([string]$local.RunId)
             $draftAfterFailure = Join-Path (Get-JiraAiDraftsRoot) ('{0}-rca.md' -f $key)
             if (-not (Test-Path -LiteralPath $draftAfterFailure)) { $draftAfterFailure = $null }
         }
@@ -256,11 +289,15 @@ foreach ($issue in $issues) {
         elseif (-not $local.Ok) {
             Write-JiraAiLog ('Local agent failed for {0}: exit={1} status={2}' -f $key, $local.ExitCode, $local.Status) 'ERROR'
             if (-not $DryRun) {
-                $failDetails = 'Exit code: {0}; runner status: {1}' -f $local.ExitCode, $local.Status
-                if ($failurePath) { $failDetails = '{0}; failure report: {1}' -f $failDetails, $failurePath }
-                if ($draftAfterFailure) { $failDetails = '{0}; RCA draft kept: {1}' -f $failDetails, $draftAfterFailure }
-                if ($local.FailureWhy) { $failDetails = '{0}`nWhy: {1}' -f $failDetails, $local.FailureWhy }
-                if ($local.RootCause) { $failDetails = '{0}`nRoot cause: {1}' -f $failDetails, $local.RootCause }
+                $failPart = if ($local.FailurePhase) { [string]$local.FailurePhase } else { 'local-agent-execution' }
+                $failWhy = if ($local.FailureWhy) { [string]$local.FailureWhy } else { ('Local agent exited with code {0} (status={1}).' -f $local.ExitCode, $local.Status) }
+                $failRoot = if ($local.RootCause) { [string]$local.RootCause } else { 'Runner returned non-zero without a structured failure report.' }
+                $failDetails = @(
+                    'Exit code: {0}' -f $local.ExitCode
+                    'Runner status: {0}' -f $local.Status
+                )
+                if ($failurePath) { $failDetails += 'Process log: {0}' -f $failurePath }
+                if ($draftAfterFailure) { $failDetails += 'RCA draft kept: {0}' -f $draftAfterFailure }
                 try {
                     Send-JiraAiLifecycleEmail `
                         -AutomationConfig $auto `
@@ -269,7 +306,10 @@ foreach ($issue in $issues) {
                         -Summary ([string]$issue.Summary) `
                         -JiraStatus ([string]$issue.Status) `
                         -BrowseUrl $browseUrl `
-                        -Details $failDetails | Out-Null
+                        -FailedPart $failPart `
+                        -Why $failWhy `
+                        -RootCause $failRoot `
+                        -Details ($failDetails -join "`n") | Out-Null
                 }
                 catch {
                     Write-JiraAiLog ('Failure email failed for {0}: {1}' -f $key, $_.Exception.Message) 'WARN'
@@ -314,12 +354,18 @@ foreach ($issue in $issues) {
                     -Summary ([string]$issue.Summary) `
                     -JiraStatus ([string]$issue.Status) `
                     -BrowseUrl $browseUrl `
-                    -Details ('{0}`nFailure report: {1}' -f $failureMessage, $failurePath) | Out-Null
+                    -FailedPart 'poller-exception' `
+                    -Why $failureMessage `
+                    -RootCause 'Unhandled exception while starting or waiting on the local investigation.' `
+                    -Details ('Process log: {0}' -f $failurePath) | Out-Null
             }
             catch {
                 Write-JiraAiLog ('Failure email failed for {0}: {1}' -f $key, $_.Exception.Message) 'WARN'
             }
         }
+    }
+    finally {
+        Clear-JiraAiProcessLogContext
     }
 }
 
@@ -333,3 +379,7 @@ if ($featuredForEmail.Count -gt 0 -and $auto.notifyEmail -ne $false) {
 }
 
 Write-JiraAiLog 'Poller pass complete.'
+
+} finally {
+    Exit-JiraAiRunLock
+}
