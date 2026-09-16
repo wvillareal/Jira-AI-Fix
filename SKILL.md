@@ -34,6 +34,43 @@ validation, feature-branch creation, and a **local commit**, but **never push**.
 and emit a `jira-rca-draft` fence (and write
 `%USERPROFILE%\.jira-ai-drafts\<JIRA_KEY>-rca.md` when running locally).
 
+Also apply [Feature-branch base selection](#feature-branch-base-selection-this-install)
+when resolving `TARGET_BRANCH` / `FEATURE_BRANCH` from the Jira Fix Version.
+
+### Speed triage (automation + Desktop)
+
+Before deep code work, do a **one-pass intake** (Jira / HDTN / attachments /
+comments each at most once). Immediately decide **code-only** vs **data-dependent**:
+
+- **Code-only** (UI/API/logic reproducible from code + ticket evidence): do **not**
+  download or restore a customer database; disclose that skip in the RCA / handoff.
+- **Data-dependent**: restore only when customer data is required to prove root cause.
+- After intake, stay in code / root-cause / fix / validation — do not re-fetch the
+  same ticket or attachments “to be sure.”
+
+## Feature-branch base selection (this install)
+
+Choose the **base** branch from the Jira **Fix Version** (fall back to the Reported
+Build family when Fix Version is empty). Confirm candidates with
+`git ls-remote --heads origin` (exact case). This overrides the runbook’s
+Prod-only Sunshine Gas exception for this machine.
+
+1. **Prefer Dev.** If a Dev line exists for that Fix Version on origin, use it as
+   `TARGET_BRANCH` — customer/dedicated Dev first (e.g. `26.1DevWaMa`), else
+   mainline `<ver>Dev` (e.g. `26.1Dev`).
+2. **Else Prod.** If no Dev branch exists for that Fix Version on origin, use the
+   matching Prod line as `TARGET_BRANCH` — customer Prod if present, else
+   `<ver>Prod` (e.g. `26.1Prod`).
+3. **Feature branch.** Create or reuse `FEATURE_BRANCH = <TARGET_BRANCH>_<JIRA>`
+   from that base (never commit fixes on the bare Dev/Prod base).
+4. **Commit only until told otherwise.** After the feature branch exists, commit
+   the validated fix locally. **Do not `git push`** in DRAFT / local automation
+   runs — stop after the local commit. Push only when the operator explicitly
+   asks, or when a non-DRAFT run reaches the runbook push step.
+
+Record in the run output which base was chosen (`Dev` vs `Prod`) and why
+(Dev present / Dev absent).
+
 ## Jira comment voice (all comments)
 
 Every Jira comment this skill posts or drafts — §6 RCA / Acceptance Verification,
@@ -47,6 +84,19 @@ and professional**:
 - One claim per bullet; evidence factual and minimal. Link or name the artifact once.
 - No casual tone, no emoji (unless a runbook marker requires it), no marketing language.
 - Ask only for what is missing; state only what was done, found, or blocked.
+
+### Delivery — Module / Modules (drafts and posted comments)
+
+In the §6 **Delivery:** block (manual Desktop and automation alike), after
+**Feature branch:** always name the clone folder(s) under `REPO_ROOT` where the
+feature branch was created/committed:
+
+- One repo: `* **Module:** i21_Liquibase`
+- Two or more: `* **Modules:** i21_Store, i21_Liquibase`
+
+Use the on-disk folder name (`i21_GlobalComponentEngine`, `i21_AccountsPayable`, …),
+not the Jira project display name. Required for live comments and `DRAFT_JIRA_COMMENT`
+drafts whenever a feature branch exists.
 
 ## Scope, before you read anything else
 
