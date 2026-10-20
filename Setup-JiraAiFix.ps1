@@ -38,6 +38,12 @@
     With -Uninstall, answer yes to every prompt INCLUDING deleting the SSH key
     pair. For unattended teardown. Without it, each group is confirmed.
 
+.PARAMETER Refresh
+    With -Section helpdesk: non-interactive cookie recapture for mid-skill use.
+    Skips Yes/No and capture-mode menus, drives the saved browser profile, writes
+    cookie + obtainedAt on success (exit 0) or exits non-zero on failure. Does not
+    apply to other sections.
+
 .PARAMETER TemplatePath
     Path to jira-ai-config.example.json, used to seed a new config with its inline
     documentation. Defaults to the copy beside this script or in the installed skill.
@@ -49,6 +55,10 @@
 .EXAMPLE
     .\Setup-JiraAiFix.ps1 -Section helpdesk
     Refresh just the helpdesk cookie.
+
+.EXAMPLE
+    .\Setup-JiraAiFix.ps1 -Section helpdesk -Refresh
+    Non-interactive helpdesk cookie refresh (skill / agent use).
 
 .EXAMPLE
     .\Setup-JiraAiFix.ps1 -Section verify
@@ -64,6 +74,7 @@ param(
     [switch] $Resume,
     [switch] $Uninstall,
     [switch] $Yes,
+    [switch] $Refresh,
     [switch] $PauseOnExit
 )
 
@@ -2440,7 +2451,49 @@ function Invoke-CookieProbe {
     }
 }
 
+function Invoke-HelpdeskRefresh {
+    # Non-interactive path for the skill: no Yes/No, no capture-mode menu.
+    # Uses the saved browser profile; writes cookie + obtainedAt only on a proved session.
+    Write-Banner 'Helpdesk cookie   -Refresh'
+
+    $node = Get-CfgNode 'helpdesk'
+    $base = [string] $node.baseUrl
+    if (-not $base) { $base = 'https://helpdesk.irely.com/irelyi21Live' }
+    $node | Add-Member -NotePropertyName 'baseUrl' -NotePropertyValue $base -Force
+
+    $profDir = [string] $node.browserProfileDir
+    if (-not $profDir) { $profDir = Join-Path $env:USERPROFILE '.jira-ai-helpdesk-browser' }
+
+    Write-Note "baseUrl: $base"
+    Write-Note "browser profile: $profDir"
+    Write-Wrapped 'Opening the browser profile. If it is still signed in, the cookie is captured with no typing. If MFA or sign-in appears, complete it in that window.' '    ' 'Gray'
+
+    $got = Invoke-BrowserCookieCapture -BaseUrl $base -ProfileDir $profDir `
+        -BrowserPath ([string] $node.browserPath) -ConfigKey 'helpdesk' `
+        -RequireCookie 'Identity\.Application' `
+        -SignInHint 'If the window shows a sign-in page, complete it (email/Company, then Microsoft/MFA). The cookie is read automatically once the session works.'
+    if (-not $got) {
+        Write-Bad 'browser capture did not produce a working session'
+        Set-Status 'helpdesk' 'failed' -Detail 'Refresh: no working session'
+        $script:HelpdeskRefreshOk = $false
+        return
+    }
+
+    $node | Add-Member -NotePropertyName 'cookie'            -NotePropertyValue $got     -Force
+    $node | Add-Member -NotePropertyName 'obtainedAt'        -NotePropertyValue (Get-Date -Format 'yyyy-MM-dd') -Force
+    $node | Add-Member -NotePropertyName 'browserProfileDir' -NotePropertyValue $profDir -Force
+    Show-SecretShape 'helpdesk.cookie' $got
+    Write-Ok 'verified against the server during capture'
+    Set-Status 'helpdesk' 'verified' -Detail 'Refresh: captured from the browser, proved live'
+    $script:HelpdeskRefreshOk = $true
+}
+
 function Invoke-HelpdeskSection {
+    if ($Refresh) {
+        Invoke-HelpdeskRefresh
+        return
+    }
+
     Write-Banner 'Optional   Helpdesk cookie'
 
     Write-FieldInfo -Name 'helpdesk.cookie' `
@@ -3387,7 +3440,39 @@ $script:Cfg = Import-Config -Path $ConfigPath -Template $TemplatePath
 Write-Host ''
 Assert-Git
 
+if ($Refresh -and $Section -ne 'helpdesk') {
+    Write-Bad '-Refresh only applies with -Section helpdesk'
+    Complete-Wizard -Unsaved
+}
+
 if ($Section) {
+    if ($Refresh -and $Section -eq 'helpdesk') {
+        $script:HelpdeskRefreshOk = $false
+        Invoke-HelpdeskSection
+        Save-Config -Path $ConfigPath -Cfg $script:Cfg
+        Write-Host ''
+        Write-Rule '='
+        if ($script:HelpdeskRefreshOk) {
+            Write-Host '  SETUP-RESULT verdict=HELPDESK-REFRESHED failed=0 exit=0' -ForegroundColor White
+            Write-Rule '='
+            Write-Ok 'helpdesk cookie refreshed'
+            if ($PauseOnExit) {
+                Write-Host '  Press Enter to close this window...' -ForegroundColor DarkGray
+                try { [void] (Read-Host) } catch { }
+            }
+            exit 0
+        }
+        Write-Host '  SETUP-RESULT verdict=HELPDESK-REFRESH-FAILED failed=1 exit=1' -ForegroundColor White
+        Write-Rule '='
+        Write-Bad 'helpdesk cookie refresh failed'
+        Write-Wrapped 'Complete sign-in/MFA in the browser profile if prompted, or re-run interactively: Setup-JiraAiFix.ps1 -Section helpdesk' '  ' 'Yellow'
+        if ($PauseOnExit) {
+            Write-Host '  Press Enter to close this window...' -ForegroundColor DarkGray
+            try { [void] (Read-Host) } catch { }
+        }
+        exit 1
+    }
+
     Invoke-Section $Section
     Save-Config -Path $ConfigPath -Cfg $script:Cfg
     Show-Status

@@ -13,7 +13,7 @@ $autoForLock = $null
 try { $autoForLock = Get-JiraAiAutomationConfig } catch { }
 $staleMinutes = Get-JiraAiLockStaleMinutes -AutomationConfig $autoForLock
 
-# Scheduled 5-minute assigned-Jira poll must not run while an investigation is active.
+# Scheduled hourly assigned-Jira poll must not run while an investigation is active.
 # Manual -IssueKey runs still go through the run lock below.
 # -Force is allowed only with -IssueKey (jump the queue by stopping the current owner).
 if ($Force -and [string]::IsNullOrWhiteSpace($IssueKey)) {

@@ -138,11 +138,12 @@ Use the same style as other columns on that table:
 - [ ] No spurious `--rollback` / `-- ROLLBACK` patterns in logic per Rule 5.
 - [ ] **lb-204:** stored-procedure changesets include `endDelimiter:GO` on the `--changeset` line.
 - [ ] **lb-205:** a standalone `GO` sits on its own line immediately before `--rollback`.
+- [ ] **lb-212:** session `SET` statements (`QUOTED_IDENTIFIER`, `ANSI_NULLS`, `NOCOUNT`, `XACT_ABORT`, `ANSI_WARNINGS`) are inside `BEGIN … END`, not between `AS` and `BEGIN`.
 - [ ] `liquibase update` (or CI) run successfully against dev.
 
 ---
 
-## 6a. Code review rules — stored procedures (lb-204 / lb-205)
+## 6a. Code review rules — stored procedures (lb-204 / lb-205 / lb-212)
 
 ### Rule lb-204 — Add `endDelimiter:GO` on the changeset line for this stored procedure
 
@@ -160,6 +161,38 @@ Example:
 END
 GO
 --rollback EXEC uspSMLiquibaseRollbackLogic 'uspSTGenerateShelfTagPreview'
+```
+
+### Rule lb-212 — Session SET (QUOTED_IDENTIFIER, ANSI_NULLS, NOCOUNT, XACT_ABORT, ANSI_WARNINGS) inside BEGIN … END
+
+Do not put session `SET` statements between `AS` and `BEGIN`. Move them inside `BEGIN … END` (or start the procedure body with `BEGIN` before the SETs).
+
+Wrong (SETs between `AS` and `BEGIN`):
+
+```sql
+AS
+SET QUOTED_IDENTIFIER OFF
+SET ANSI_NULLS ON
+SET NOCOUNT ON
+SET XACT_ABORT ON
+SET ANSI_WARNINGS ON
+BEGIN
+    -- body
+END
+```
+
+Fix:
+
+```sql
+AS
+BEGIN
+    SET QUOTED_IDENTIFIER OFF
+    SET ANSI_NULLS ON
+    SET NOCOUNT ON
+    SET XACT_ABORT ON
+    SET ANSI_WARNINGS ON
+    -- body
+END
 ```
 
 ---

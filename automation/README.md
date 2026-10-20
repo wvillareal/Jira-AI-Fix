@@ -25,7 +25,7 @@ launches and start emails. If Windows interrupts the run, the next poll recovers
 `Investigation resumed` email.
 
 **One Jira at a time:** a run lock plus scheduled-task `IgnoreNew` ensure only one
-investigation runs. The 5-minute assigned-Jira poll is skipped entirely while automation
+investigation runs. The hourly assigned-Jira poll is skipped entirely while automation
 is busy (no Jira search, no new launch). Extra candidates are deferred to a later idle poll.
 
 **Stale lock reclaim:** if the lock owner **PID is dead** (or the lock is orphaned
@@ -95,7 +95,7 @@ Snapshot of the active agent (updated continuously during a run):
 4. Hidden scheduled task (silent — no PowerShell flash; uses wscript launcher):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.jira-ai-automation\Install-ScheduledTask.ps1" -IntervalMinutes 5
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.jira-ai-automation\Install-ScheduledTask.ps1" -IntervalMinutes 60
 ```
 
 ## Manual

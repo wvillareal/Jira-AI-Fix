@@ -1,0 +1,14 @@
+---
+description: Never create or use linked Git worktrees; main clone only
+alwaysApply: true
+---
+
+# No git worktrees
+
+Never create or use a linked Git worktree.
+
+- Forbidden: `git worktree add`, `*_wt` / TEMP linked checkouts, Cursor best-of-n isolated worktrees, any second checkout of an i21 repo.
+- Do all work in the repo’s main clone. Branch switch / stash there only.
+- If the main clone is locked or dirty: wait, stash, or stop and tell the operator — do not work around with a worktree.
+- Clean leftovers with `git worktree remove` / `git worktree prune`, then continue in the main tree.
+- “Working tree” in runbooks means the main checkout’s files, not `git worktree`.

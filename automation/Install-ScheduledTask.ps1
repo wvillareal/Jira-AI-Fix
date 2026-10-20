@@ -4,7 +4,7 @@
 #>
 [CmdletBinding()]
 param(
-    [int]$IntervalMinutes = 5,
+    [int]$IntervalMinutes = 60,
     [string]$TaskName = 'JiraAiAssignPoller'
 )
 

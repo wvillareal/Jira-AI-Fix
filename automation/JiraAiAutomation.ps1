@@ -120,7 +120,7 @@ function Write-JiraAiLog {
 function Test-JiraAiAutomationBusy {
     <#
       Returns whether automation is currently processing a Jira investigation.
-      Used to skip the scheduled 5-minute assigned-Jira poll while busy.
+      Used to skip the scheduled hourly assigned-Jira poll while busy.
     #>
     $result = [pscustomobject]@{
         IsBusy    = $false

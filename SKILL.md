@@ -30,12 +30,32 @@ packages do not wipe them — do not edit `runbook/JIRA-AI-Fix.md` for this.
 Also apply [DRAFT_JIRA_COMMENT mode](DRAFT_MODE.md) when the prompt contains
 `DRAFT_JIRA_COMMENT` or `Mode: DRAFT_JIRA_COMMENT`: run through implementation,
 validation, feature-branch creation, and a **local commit**, but **never push**.
-**Author** the §6 RCA / Acceptance Verification comment, **do not post it to Jira**,
-and emit a `jira-rca-draft` fence (and write
+**Author** the §6 RCA comment in the four-section shape
+([RCA Jira comment shape](#rca-jira-comment-shape-this-install)), **do not post it
+to Jira**, and emit a `jira-rca-draft` fence (and write
 `%USERPROFILE%\.jira-ai-drafts\<JIRA_KEY>-rca.md` when running locally).
 
 Also apply [Feature-branch base selection](#feature-branch-base-selection-this-install)
 when resolving `TARGET_BRANCH` / `FEATURE_BRANCH` from the Jira Fix Version.
+
+Also apply [RCA Jira comment shape (this install)](#rca-jira-comment-shape-this-install)
+whenever authoring a §6 RCA body (draft, conversation fence, or live post).
+
+### No git worktrees (this install) — hard ban
+
+**Never** create, use, or leave behind a linked Git worktree for Jira-AI-Fix work.
+
+- **Forbidden:** `git worktree add`, disposable folders named `*_wt`, TEMP/sibling
+  checkouts linked to the repo, Cursor **best-of-n-runner** (isolated worktree),
+  or any “second checkout” of `REPO_PATH` / i21 clones.
+- **Required:** do all reads and edits in the **main** clone under `REPO_ROOT`
+  (e.g. `C:\Repo\GitHub\i21_Liquibase`). Switch branches / stash in that tree only.
+- **If the main clone is locked or dirty:** wait, stash, or STOP and tell the
+  operator — do **not** work around with a worktree.
+- **If a linked worktree already exists from a prior run:**
+  `git worktree remove` / `git worktree prune` it, then continue in the main tree.
+- Runbook phrases like “working tree” mean the checked-out files of the main
+  clone, **not** `git worktree`.
 
 ### Speed triage (automation + Desktop)
 
@@ -47,6 +67,13 @@ comments each at most once). Immediately decide **code-only** vs **data-dependen
 - **Data-dependent**: restore only when customer data is required to prove root cause.
 - After intake, stay in code / root-cause / fix / validation — do not re-fetch the
   same ticket or attachments “to be sure.”
+- **Helpdesk session expired / cannot connect** (login redirect when reading a
+  referenced HDTN): **once per run**, shell
+  `powershell -ExecutionPolicy Bypass -File "<skillDir>\Setup-JiraAiFix.ps1" -Section helpdesk -Refresh`
+  (skillDir = this skill’s folder, else `%USERPROFILE%\.claude\skills\jira-ai-fix`,
+  else `%USERPROFILE%\.cursor\skills\jira-ai-fix`), re-read config, retry once; if
+  still dead, record the gap and continue on Jira evidence (runbook §1 step 6).
+  Never loop; never store a helpdesk password.
 
 ## Feature-branch base selection (this install)
 
@@ -71,32 +98,73 @@ Prod-only Sunshine Gas exception for this machine.
 Record in the run output which base was chosen (`Dev` vs `Prod`) and why
 (Dev present / Dev absent).
 
+## RCA Jira comment shape (this install)
+
+On this install, the §6 RCA **Jira comment body** (conversation `jira-rca-draft`,
+draft file, or live post) is **exactly these four sections — nothing else**:
+
+```markdown
+# Root Cause Analysis
+
+**Non-technical analysis:**
+
+<2–4 plain-language sentences: what the user saw, why it happened in business terms,
+and what the fix changes for them. No file names, code objects, SQL, branch, or repo jargon.>
+
+**Technical analysis:**
+
+<How the cause was confirmed — what was checked, in what order, and what evidence pinned
+it. Name the files/objects involved when useful. Short bullets preferred.>
+
+**Root cause:**
+
+<The underlying defect. When unreproduced, use "Root cause (HYPOTHESIS — not reproduced)".
+Name the specific mechanism; competing unexcluded candidates stay listed as hypotheses.>
+
+**Solution:**
+
+<What was delivered (1–2 lines): what it does and why that shape. No Acceptance Verification,
+delivery links, footers, or other §6 register blocks.>
+```
+
+**Hard rules for this override:**
+
+- Do **not** emit Delivery, Verification status, Issue, Investigation, Technical evidence,
+  Proposed Solution, Acceptance Verification, Proof of testing, data-fix appendices,
+  `KNOWLEDGE-DRAFT` / `KB-CONSULTED` / `READY-FOR-PR`, run-basis, or telemetry in the
+  Jira comment body.
+- Honesty still applies: every claim must be traceable to the ticket, CHANGESET, or
+  observed evidence; Non-technical analysis must not add facts beyond the other three
+  sections.
+- Runbook §6 analysis gates still run during the work; only the **published comment
+  shape** is overridden. Put Module/branch/commit, acceptance grades, and disclosures
+  in the **conversation handoff** outside the `jira-rca-draft` fence when useful.
+
 ## Jira comment voice (all comments)
 
-Every Jira comment this skill posts or drafts — §6 RCA / Acceptance Verification,
+Every Jira comment this skill posts or drafts — §6 RCA (four sections above),
 information request, triage, handoff, and local RCA drafts — must be **short, direct,
 and professional**:
 
-- Keep the required §6 block register and honesty rules; compress the **prose inside**
-  each block. Do not invent a shorter custom template.
+- For the §6 RCA, use only the four sections in
+  [RCA Jira comment shape (this install)](#rca-jira-comment-shape-this-install).
+  Compress prose inside those sections. Do not expand back to the full runbook register.
 - Prefer short sentences and tight bullets. Cut filler, hedging, narration, and
   throat-clearing (“In order to…”, “It should be noted that…”, long restatements).
 - One claim per bullet; evidence factual and minimal. Link or name the artifact once.
 - No casual tone, no emoji (unless a runbook marker requires it), no marketing language.
 - Ask only for what is missing; state only what was done, found, or blocked.
 
-### Delivery — Module / Modules (drafts and posted comments)
+### Handoff — Module / Modules (outside the RCA comment)
 
-In the §6 **Delivery:** block (manual Desktop and automation alike), after
-**Feature branch:** always name the clone folder(s) under `REPO_ROOT` where the
-feature branch was created/committed:
+In the conversation handoff (not inside the four-section RCA body), name the clone
+folder(s) under `REPO_ROOT` where the feature branch was created/committed:
 
-- One repo: `* **Module:** i21_Liquibase`
-- Two or more: `* **Modules:** i21_Store, i21_Liquibase`
+- One repo: `Module: i21_Liquibase`
+- Two or more: `Modules: i21_Store, i21_Liquibase`
 
 Use the on-disk folder name (`i21_GlobalComponentEngine`, `i21_AccountsPayable`, …),
-not the Jira project display name. Required for live comments and `DRAFT_JIRA_COMMENT`
-drafts whenever a feature branch exists.
+not the Jira project display name.
 
 ## Scope, before you read anything else
 
@@ -279,4 +347,36 @@ Example:
 END
 GO
 --rollback EXEC uspSMLiquibaseRollbackLogic 'uspSTGenerateShelfTagPreview'
+```
+
+### Rule lb-212 — Session SET inside `BEGIN … END`
+
+Do not put session `SET` statements (`QUOTED_IDENTIFIER`, `ANSI_NULLS`, `NOCOUNT`, `XACT_ABORT`, `ANSI_WARNINGS`) between `AS` and `BEGIN`. Move them inside `BEGIN … END` (or start the procedure body with `BEGIN` before the SETs).
+
+Wrong (SETs between `AS` and `BEGIN`):
+
+```sql
+AS
+SET QUOTED_IDENTIFIER OFF
+SET ANSI_NULLS ON
+SET NOCOUNT ON
+SET XACT_ABORT ON
+SET ANSI_WARNINGS ON
+BEGIN
+    -- body
+END
+```
+
+Fix:
+
+```sql
+AS
+BEGIN
+    SET QUOTED_IDENTIFIER OFF
+    SET ANSI_NULLS ON
+    SET NOCOUNT ON
+    SET XACT_ABORT ON
+    SET ANSI_WARNINGS ON
+    -- body
+END
 ```

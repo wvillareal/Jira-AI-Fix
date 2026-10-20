@@ -12,7 +12,7 @@
     "notifyEmail true sends investigation started/resumed, completed-draft, and failure emails."
   ],
   "mode": "local",
-  "pollLookbackMinutes": 15,
+  "pollLookbackMinutes": 60,
   "localCwd": "",
   "investigateModel": "grok-4.5",
   "wrapUpModel": "auto",

@@ -1,5 +1,19 @@
 # Dev Review — format and procedure
 
+> **Version.** `2.0.0` · source copy — hand-distributed, not unpacked from a release zip
+>
+> Major, because the operating model inverted: the review is **posted**, not dropped in chat as a
+> draft for approval (see **The prompt**). Anything built around the draft step no longer applies.
+
+> **This is the shipped review, and it depends on no knowledge store.** It carries the full
+> procedure — the posting discipline, the comment template, the pre-post check, the machine-read
+> trailer and the runbook-improvement items — with none of the store's reading or writing.
+> **Local merge note (2026-09-24):** knowledge-store / `DEV-REVIEW-KB` wiring is deferred while the
+> store is still in development and testing — use **this** file. A future store-enabled variant
+> (same review, plus `KB-CONSULTED` reading rules, a `kb=` trailer field and reconciliation) will
+> diverge in exactly that one dimension; any improvement that is not about the store belongs in
+> **both** when that variant lands.
+
 A **Dev Review** is a judgement posted on a JIRA about work that already exists: it confirms or
 overturns an RCA, accepts or replaces the proposed fix, and states what happens next. Every claim in
 it is proven — by evidence the run produced, or by the developer's own reading and testing — and it
@@ -9,12 +23,12 @@ never introduces an unproven one.
 the fix themselves, then invoke this skill with the verdict that testing produced. This skill turns
 that judgement into a defensible comment; it does not form the judgement.
 
-> **This is the interim version and it depends on no knowledge base.** `DEV-REVIEW v4.md` is the
-> other one, wired to the JIRA-AI Knowledge Base and its reconciler: it emits a machine-read trailer,
-> reads the run's `KB-CONSULTED` block, and routes corrections into the base as facts. While the
-> knowledge-base approach is still being settled, use **this** file. The two are meant to diverge;
-> the discipline that survives without a base — grading the run's claims one at a time, naming why a
-> remedy fell short, keeping content out of the runbook — is kept here in prose instead.
+> **What the store would add, and why its absence costs this review nothing.** A store-enabled
+> review can tell a run that read a record and ignored it from one that never looked, and it can
+> promote a confirmed finding into a rule the next run reads. Neither is how *this* review reaches
+> its verdict. The discipline that does the work — grading the run's claims one at a time, naming
+> why a remedy fell short, grading the reviewer's own replacement, keeping content out of the
+> runbook — is all here, and all of it survives with no base at all.
 
 Reference examples:
 [AP-24880](https://irely.atlassian.net/browse/AP-24880?focusedCommentId=1268543) (fix replaced by a
@@ -44,12 +58,25 @@ What I tested:
 6. Transaction <id> — <what I did and what I observed>.
    (or: not tested — <why>)
 
-Drop the draft here first — do not post it.
-Nothing leaves this chat until I say so: no comment posted, no owning-module
-ticket created, no branch renamed, no file attached, no label or status changed.
+Post it. Everything else still waits for me: no owning-module ticket created,
+no branch renamed, no file attached, no label or status changed.
 ```
 
 Everything below is standing format — the developer supplies only the verdict and the testing lines.
+
+**The review is POSTED, not drafted (operator 2026-09-14).** The developer has already done the
+analysis and the testing; the draft-and-wait step made them approve their own judgement a second
+time, and the wait was the slowest part of the loop. So the comment goes up in the same turn, and
+the chat afterwards reports what went up and what is still outstanding on it.
+
+**The post is the only thing authorized.** Everything else in the procedure still stops and asks:
+creating an owning-module ticket, renaming a branch, attaching a file, and every label or status
+change. Those change who owns work; a comment does not, and a comment can be repaired in place.
+
+**Where an independent reading disagrees with the developer's verdict, say it IN the comment, not
+before it.** The draft step used to be where that surfaced. It now surfaces as prose in Section 2 or
+Section 3 — which is where it belonged anyway, because a disagreement settled in chat leaves no
+trace on the ticket. Never quietly drop a finding because there is no longer a draft to raise it in.
 
 **Lines 5 and 6 are the developer's own work, and they are why this review carries weight.** The
 verdict comes from having exercised the fix, not from reading about it. Supply them with the verdict
@@ -66,10 +93,24 @@ rejected fix does not tell you what the right one is, and guessing it is how a r
 advocating a change nobody chose.
 
 **Verification is normally INCLUDED, because the developer already did it.** Lines 5 and 6 of the
-prompt carry it, and Section 5 reports it. Ask only when they are missing: one line — *"you didn't
-give me the environment and transaction — include a Verification section, or post the verdict
-alone?"* Never assume it, never invent it, and never leave it out silently. A review that skips
-verification the developer actually performed throws away its best evidence.
+prompt carry it, and Section 5 reports it. Never assume it, never invent it, and never leave it out
+silently. A review that skips verification the developer actually performed throws away its best
+evidence.
+
+**A MISSING Section 5 HOLDS THE POST (operator 2026-09-14).** This is the one gate the
+post-directly change does not lift. When lines 5 and 6 are absent, do not post. Ask once, in one
+line, naming what would fill it: environment URL, build stamp, database, and a transaction whose
+guard actually fires. Then wait.
+
+**Silence holds the post; a stated `not tested` does not.** `not tested — <why>` is a complete answer
+and the review posts on the verdict alone, with Section 5 omitted and `verification: not-tested` in
+the trailer. What must never happen is a review going up because nobody was asked. The distinction is
+the whole point: a developer who decided not to test has made a judgement the review can report; a
+developer who was never asked has had one invented for them.
+
+**The routing exception still applies.** A review confirming the defect is owned by another module
+posts with no Section 5 and no ask — see the exception below. Nothing of ours was verified because
+nothing of ours was fixed.
 
 **Exception — do not ask, and skip Verification entirely, when the review CONFIRMS the defect is owned
 by another module** (operator 2026-09-03). A routing review verifies nothing: no fix lands here, so
@@ -98,8 +139,8 @@ Older comments carry none, and their absence changes nothing about the review.
   reported row and not for the population. A claim the review had no evidence to judge is *ungraded*,
   which is honest and common for the fourth. A review that grades all four as ungraded re-derived
   nothing — say that rather than posting it.
-- **`RUN-GATES`** collects the gate verdicts the run recorded — symptom, repro, origin, align,
-  remedy, coverage, ownership, data cause. **Read it against the prose above it.** Every token is
+- **`RUN-GATES`** collects the gate verdicts the run recorded — symptom, repro, premise, origin,
+  align, remedy, coverage, ownership, data cause. **Read it against the prose above it.** Every token is
   copied from somewhere else in the same comment, so a disagreement is visible without opening a
   transcript, and it is the one thing that exposes a gate that fired and was not honoured. Two live
   examples: a reproduction verdict of `NOT-REPRODUCED-NO-ENV` sitting above a ledger naming the
@@ -288,7 +329,188 @@ settled change to a document its readers cannot see.
 
 ---
 
-## Verification — the developer's own testing, reported
+## The comment template — the shape every review is filled into
+
+**This block is the format authority for what the comment CONTAINS.** [AP-24953](https://irely.atlassian.net/browse/AP-24953?focusedCommentId=1275674)
+remains the reference for how it *looks* on a rendered ticket; when the two disagree on wording, this
+template governs the slots and AP-24953 governs the rendering. Copy it, fill it, delete what did not
+fire. Two readers of this document must not be able to produce two differently-shaped reviews.
+
+**How to read it.** `<angle brackets>` are placeholders — every one is replaced or its section is
+deleted, and **a placeholder that reaches Jira is a defect in the review**. `[omit when …]` lines are
+conditions on the section above them and are never posted. Identifiers keep their inline `code` marks.
+Nothing in the template is a heading except the first line.
+
+````
+### Dev review - <short outcome, e.g. "RCA confirmed, fix accepted" | "RCA overturned, fix replaced" | "defect owned by CT">
+
+**Bottom line.** <One or two sentences. No object names, no file paths, no gate ids, no counts.
+Answer only: does the proposed fix work, and what happens next. This is the line a BA or a manager
+reads, and it is the one question they actually asked.>
+
+**RCA verdict - <correct | correct but incomplete | wrong>.** <The mechanism, short sentences, one
+claim each. Put arithmetic on its own line rather than in prose.>
+
+    <input>  ->  <result>        <what it should be>   -> <the discrepancy>
+
+<Grade the four KNOWLEDGE-DRAFT claims, one line each, when the RCA carries that block:>
+
+* C1 mechanism - <true | half | wrong | ungraded>. <why>
+* C2 cause - <true | half | wrong | ungraded>. <why>
+* C3 fix-pattern - <true | half | wrong | ungraded>. <why>
+* C4 verified-by - <true | half | wrong | ungraded>. <why>
+
+**What made the proposed fix look right.** [omit only on a clean pass]
+<One sentence naming what the run actually observed that made its remedy correct on the evidence it
+had. This is not a concession - it is what tells the runbook owner which gate to reach for, and a
+verdict without it reads as carelessness and produces the wrong rule.>
+
+**Solution.** <The correct solution, from verdict line 3. What was accepted, rejected or replaced,
+where a replacement comes from, and what was deliberately excluded. Name the shape when a remedy
+falls short: wrong layer | not durable | incomplete coverage | below standard | not enumerated.>
+
+**The replacement, graded.** [omit when the proposed fix stood, or when no replacement code exists yet]
+<The same four questions the Solution section put to the proposal, put to the replacement. The
+reviewer wrote this one, which is exactly why it is asked here and not assumed.>
+
+* Reachable on the reported symptom? <does the changed statement execute on the reported record - name
+  the guard and both sides of it>
+* Sites of the mechanism closed? <n of m, counted - never estimated>
+* Dependencies the target module does not already carry? <none, or name them>
+* Alternative enumerated? <the candidate considered and why this one won, or "not enumerated">
+
+**Why this approach rather than the proposed one.** [omit when the fix stood]
+<Concrete numbers, checked per account / per row - never on totals alone.>
+
+**Verification.** [omit on a routing review, or when the developer did not test]
+Environment `<URL>`, build `<stamp>`, database `<server or restore>` / `<database>`.
+<State that the deployed object matches the reviewed code, or that it has since been reverted.>
+<The observed result, and why the tested transaction is discriminating - the guard inputs and both
+outcomes. A transaction whose guard does not fire proves nothing.>
+
+**Developer's Testing:**
+
+1. "<acceptance criterion, quoted from the ticket>" - <PASS | FAIL | NOT TESTED | NOT REPRODUCED>.
+   <what was observed, or the blocker named>
+2. <...>
+
+Screenshots of `<transaction>` to be attached for verification support.
+
+**Disposition.** <Branch, commit, patch artifact, who raises the PR, and what this supersedes. When
+no routing ticket is created, say explicitly that the ticket is not being moved.>
+
+**What needs to improve in the runbook.** [omit on a clean pass - RCA correct AND fix correct]
+<The GENERAL failure in one short paragraph, stated as a property of the run's reasoning rather than
+of the domain.>
+
+1. <slug> - <no-gate | trigger-narrow | wrong-answer | mis-sequenced | not-followed>
+   Gate:           <section id and rule id, or NONE - and when NONE, name what was searched to
+                    establish it>
+   Signature:      <one line, written to match the same failure on another ticket>
+   Position:       <where in the sequence it belongs, and what it gates>
+   Cost:           <what this check costs every future run>
+   Counterfactual: <the observable this gate would have produced on THIS ticket>
+   Supersedes:     <rule id, or nothing>
+
+<Close with which single item would have caught the ticket dead, stated as an observable.>
+
+---
+
+cc <mention> <mention>
+
+DEV-REVIEW: <JIRA> | rca=<correct|incomplete|wrong> | fix=<accepted|replaced|qualified>
+claims: C1=<...> C2=<...> C3=<...> C4=<...>
+remedy: <sound | wrong-layer | not-durable | incomplete-coverage | below-standard | not-enumerated>
+premise: <confirmed|refuted|contested|unverified|not-reached>:<A1|A1b|A2|A3|A4|A5|self-evident|none> | agree=<yes|no>
+verification: <tested|not-tested|routing> | pot=<attached|outstanding|n-a> | criteria=<passed>/<total>
+objects: <dbo.uspX, File.js>
+errors: <80236>
+screen: <Module.view.Screen>
+````
+
+### Three slots that are new, and why each earns its place
+
+- **`Bottom line` opens the comment**, before any verdict. The corpus reason: on SC-9264 the module
+  lead asked *"Did AI fixed this or not?"* and a two-thousand-word review never answered it in a
+  readable line. A dev review is read by people who will not parse a gate taxonomy, and the technical
+  body is no less useful for having one plain sentence above it.
+- **`What made the proposed fix look right`** carries the causal account that claim grading cannot.
+  `C2 cause - wrong` is a verdict; it does not say what the run saw. On SC-9264 the account is one
+  sentence — a nearly-exhausted contract is the only route by which an over-long number reaches that
+  grid — and skipping it is why two of the three runbook items came out misfiled.
+- **`The replacement, graded`** closes the document's one structural blind spot. Everywhere else the
+  reviewer is the judge; here they are the author, and until this slot existed nobody graded their
+  code. Measured on SC-9264: the replacement carried three of the five named shapes and the review
+  named none of them.
+
+### Pre-post check — four lines, before the comment goes up
+
+Run these against the comment body, in order, immediately before the call that posts it. Each one is
+a defect the corpus has actually produced:
+
+1. **Every slot resolved** — no `<placeholder>` and no `[omit when …]` survives into the body.
+2. **Trailer present**, after the cc divider, plain text, nothing following it. A review with no
+   trailer cannot be read in bulk, which downstream is the same as not having been written.
+3. **cc present**, naming the owners the disposition implicates, as `mention` nodes.
+4. **Every token in the trailer traceable to prose above it** — `criteria=` is arithmetic over the
+   Developer's Testing list, `remedy=` matches the shape named in Solution, `claims:` matches the four
+   graded lines. A token that disagrees with the comment is a defect in the review.
+
+---
+
+## The trailer — Section 9
+
+Every review ends with this block, **including a clean pass**. It is the review's machine-read
+summary: plain text, after the cc divider, never rendered as a heading and never linked — a machine
+reads it, for the same reason the fix runbook's own closing blocks are plain.
+
+```
+DEV-REVIEW: <JIRA> | rca=<correct|incomplete|wrong> | fix=<accepted|replaced|qualified>
+claims: C1=<true|half|wrong|ungraded> C2=<…> C3=<…> C4=<…>
+remedy: <sound | wrong-layer | not-durable | incomplete-coverage | below-standard | not-enumerated>
+premise: <confirmed|refuted|contested|unverified|not-reached>:<A1|A1b|A2|A3|A4|A5|self-evident|none> | agree=<yes|no>
+verification: <tested|not-tested|routing> | pot=<attached|outstanding|n-a> | criteria=<passed>/<total>
+objects: <dbo.uspX, File.js>
+errors: <80236>
+screen: <Module.view.Screen>
+```
+
+**`premise:` grades the run's §2.4 verdict, and `agree=` is the only field here that is not a copy.**
+The first half restates what the run recorded — its verdict and the rung that answered. The second
+is the reviewer's own judgement of whether that verdict was right, and it is what makes an
+overturned premise gradeable rather than merely logged. `not-reached` is correct and common: the
+gate exits in one line on a self-evident symptom, and a review that pretends otherwise is inventing
+a check nobody ran.
+
+**`premise: refuted … agree=yes` is the most valuable single outcome here.** It means the run
+concluded the reported behaviour was intended, a person checked that conclusion, and the two agree.
+Say plainly in Section 5 what the intended behaviour is, because that sentence is the answer the
+next ticket making the same claim needs — and a reviewer who agrees without stating it leaves the
+next run to re-derive it from nothing.
+
+**`claims:` grades `KNOWLEDGE-DRAFT` claim by claim**, in the same order the run stated them. All four
+`ungraded` means the review re-derived nothing; say that in chat rather than posting it.
+
+**`verification:` is the developer's own testing, in three tokens.** `tested` when they exercised the
+change, `not-tested` with the reason carried in Section 5's absence, `routing` when the defect is
+owned elsewhere and there was nothing here to verify. `pot=outstanding` is the normal state at
+posting time — the testing happened, the captures are a human step and not yet attached. `criteria=`
+counts the acceptance criteria observed to pass against the total the review graded; it is arithmetic
+over the Developer's Testing list, never an estimate.
+
+**Every token is copied from the review above it.** Like the fix run's own gate line, this block
+computes nothing. A token disagreeing with the prose in the same comment is a defect in the review,
+and the fix is the prose or the token — never a quiet edit of one to match the other after posting.
+
+---
+
+## Verification — the developer's manual testing, and the ticket's Proof of Testing
+
+**This section is the verdict on an AI-authored change, and it is the ticket's POT.** The work under
+review was written by a run; what makes this a judgement rather than a second opinion is that a
+developer exercised that change by hand. Section 5 is where that testing is reported, and it is the
+same artifact the code-fix task guide calls a Proof of Testing — one activity, one record, no second
+document to produce.
 
 **Skipped outright on a routing review.** When the review confirms the defect is owned by another
 module, Section 5 does not appear and the question is not asked — see the exception under **The
@@ -422,6 +644,22 @@ cleaner in both directions.
 
 ## Rules
 
+- **Post the review; do not draft it (operator 2026-09-14).** The comment goes up in the same turn
+  the verdict arrives. The post is the ONLY authorized action — an owning-module ticket, a branch
+  rename, an attachment, and every label or status change still stop and ask.
+- **One thing still holds the post: missing testing lines (operator 2026-09-14).** No lines 5 and 6
+  and not a routing review → ask once and wait. A stated `not tested — <why>` is an answer and
+  posts; silence is not. A review must never go up carrying a verification verdict nobody gave.
+- **Emit the trailer on every review, including a clean pass.** A review with no Section 9 cannot be
+  read in bulk, and a review nothing can read in bulk teaches nothing beyond its own ticket. Full
+  shape in **The trailer — Section 9**.
+- **Run the pre-post check before the comment goes up.** Four lines, fail-closed: no surviving
+  placeholder, trailer present, cc present as `mention` nodes, and every trailer token traceable to
+  the prose above it. Full shape in **Pre-post check — four lines, before the comment goes up**.
+- **Section 5 is the Proof of Testing, not a summary of one.** The developer's manual testing of the
+  AI-authored change is what the task guide means by POT. Report it here, grade each acceptance
+  criterion honestly, and record whether the captures are attached or still outstanding. Never mark
+  a criterion `PASS` the developer did not observe.
 - **Keep responses brief and concise.** Focus only on the important or relevant details and avoid
   unnecessary explanations. This governs the posted comment and the chat around it: a reviewer reads a
   dev review to learn the verdict and what happens next, not to be walked through the reasoning. State
@@ -453,8 +691,14 @@ cleaner in both directions.
   module's project, created directly, with the original left in place and linked.
 - **Every routing ticket leaves with an assignee** — BA, then PM, then the creating account. An
   unassigned ticket in another team's project is indistinguishable from noise on their board.
-- **ADF, not markdown.** In a mention-bearing comment, markdown `@names` and `[text](url)` are inert —
-  use `mention` nodes and `link` marks. Resolve ids with `lookupJiraAccountId`.
+- **ADF, not markdown — because of MENTIONS specifically (corrected by measurement, 2026-09-11).**
+  Posting markdown and inspecting the stored ADF on AP-23251: `[text](url)` **does** convert to a
+  proper `link` mark (5 of 5 survived), but an `@name` or `[~accountid:…]` **does not** — it is
+  escaped and stored as literal text, 0 mention nodes, so nobody is notified and the reader sees
+  raw bracket syntax. So links are not the reason to reach for ADF; **mentions are the only reason,
+  and they are reason enough** whenever a comment must notify someone. Use `mention` nodes, and
+  resolve ids with `lookupJiraAccountId`.
+- **Whichever format you post, the BODY SYNTAX must match it (R-COMMENT-MARKDOWN, measured on AP-23251, 2026-09-11).** The rule above settles *which* format a review uses; this one is about not mixing them up. `contentFormat: markdown` converts **Markdown** to ADF and passes **Jira wiki markup straight through as literal text** — so `h2.`, `{{mono}}`, `{code:sql}` and `|| header ||` render as visible garbage on a ticket the whole team reads. The trap is that both syntaxes look like markup to whoever is writing, and the parameter name is the only clue. In Markdown use `## heading`, `**bold**`, `` `inline` ``, triple-backtick fences and `-` bullets, and **prefer a bulleted list to a table**. Repair in place via `commentId`, as above.
 - **Render to the AP-24953 shape** (operator 2026-09-03): one `###` heading, bold lead-in paragraphs for
   sections (never numbered/`###` section headings), Developer's Testing inside Verification, cc after a
   divider. A review posted in the wrong shape is edited **in place** (`addCommentToJiraIssue` with
@@ -465,8 +709,8 @@ cleaner in both directions.
   paired underscores as italics and the underscores are then *gone* from the stored comment,
   surviving only as an `em` mark — measured on a real handoff line, where `i21_Liquibase` and
   `26.3DevCTRMFeatures_DunkinBrands_IC-29794` both arrived stripped. It corrupts some names and not
-  others, so it hides. This bites hardest when a **developer pastes the draft themselves**, which is
-  the expected workflow: paste the prose, but let the identifiers carry their code marks.
+  others, so it hides. This bites hardest when a **developer copies the review's prose onward** into
+  a PR description or a chat: copy the prose, but let the identifiers carry their code marks.
 - **Grade the four claims separately, and grade the CHOICE of fix** (operator 2026-09-05). A single
   RCA verdict is ticket-level and cannot express the corpus's commonest outcome — a true mechanism
   carrying a wrong remedy. Say which claim failed, and say why the fix was inadequate using the five
